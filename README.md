@@ -79,6 +79,6 @@ export GSASII_REFINEMENT_STAGING="$HOME/GSAS-II_refinement_staging"
 
 ## License / 许可证
 
-No license has been specified yet. Add a license before inviting public reuse.
+Released under the MIT License. See [LICENSE](LICENSE).
 
-目前尚未指定开源许可证。如果希望他人正式复用，请在发布前补充许可证。
+本项目采用 MIT 许可证发布，详见 [LICENSE](LICENSE)。
