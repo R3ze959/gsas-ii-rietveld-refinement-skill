@@ -39,7 +39,7 @@ CIF:
 
 - Confirm space group, cell, atom labels, occupancy, and formula.
 - Prefer CIF over mol2 for refinement.
-- For a trusted Nb14W3O44 parent CIF, confirm `Nb14 O44 W3`, `I4/m`, No. 87, and cell parameters close to `a=b=20.9767 A`, `c=3.82267 A`.
+- If using a parent or reference CIF, confirm formula, space group, cell parameters, atom labels, and occupancies match the intended material before refinement.
 
 ## Staged parameter order
 
@@ -64,7 +64,7 @@ Useful limited candidates:
 
 - Background 8, 10, rarely 12.
 - X/Y if Lorentzian broadening seems needed.
-- Isotropic microstrain for high-entropy or strain-broadened samples.
+- Isotropic microstrain for strain-broadened or disorder-broadened samples.
 - Size only if broadening is size-like and stable.
 - Preferred orientation only with systematic family intensity bias.
 - Additional phase only for residual peaks that match a plausible impurity.
@@ -105,29 +105,15 @@ Defaults:
 - Export only `*_python_rietveld.png` into the same sample archive folder as the final XRD and `.gpx`.
 - Use the GSAS-II reflection list for HKL labels and Bragg positions; do not borrow labels from reference images.
 - Select up to eight intense, separated reflections. HKL labels should stay centered at the real GSAS-II Bragg 2theta positions; avoid sideways label shifts that make a peak label look assigned to the wrong reflection. Use vertical clearance and subtle leader lines when labels need to be lifted above peaks.
-- Use `10-60°` as the default plotting window for the user's Nb14W3O44 XRD comparison unless the data or user request calls for a different range.
+- Use `10-60°` as the default lab-XRD plotting window unless the data range or user request calls for a different range.
 - Hide y-axis numeric labels by default for relative-intensity XRD figures; use `--show-y-values` only when absolute intensity values matter.
 - Do not keep plot CSVs, `TIF`, `PDF`, `SVG`, or plot manifest files in the final archive unless the user explicitly requests them for a specific paper/submission.
 - Do not leave the final figure/data only in a shared folder such as `Python绘图/`; that kind of folder is temporary comparison output, not final archive layout.
 
-## Nb14W3O44 defaults
+## Structure-model defaults
 
-- Use `I4/m` No. 87, not `I-4`.
-- Keep Nb/W occupancy fixed initially.
-- Keep O occupancy fixed unless independent evidence supports oxygen defects.
-- Treat high-entropy doped samples as parent-average structure first.
-- State that Cu Kalpha powder refinement cannot by itself prove Ti/Zr/V/Ta/Mo all enter the lattice.
-
-## Known baseline outcomes
-
-NWO514:
-
-- Conservative: Rwp about 4.221%, `a≈20.96464 A`, `c≈3.81787 A`.
-- Lower-Rwp microstrain candidate: Rwp about 4.121%.
-- Do not recommend the slightly lower XY candidate if X is negative.
-
-HE-NWO518:
-
-- Conservative: Rwp about 5.715%, `a≈20.94219 A`, `c≈3.81172 A`.
-- Recommended microstrain candidate: Rwp about 5.176%, `a≈20.94502 A`, `c≈3.81214 A`.
-- Reject XY + microstrain as final when SVD/100% correlation appears.
+- Use the space group and starting model from the user-supplied or clearly cited reference CIF.
+- Keep mixed cation or anion occupancy fixed initially unless independent composition or structural evidence supports refinement.
+- Keep defect concentrations fixed unless they are constrained and chemically justified.
+- Treat doped or compositionally complex samples as a parent-average structure first unless the user provides stronger evidence.
+- State that lab Cu Kalpha powder refinement cannot by itself prove exact dopant site occupancy, defect concentration, or full site ordering.
