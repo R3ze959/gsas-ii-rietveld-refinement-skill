@@ -10,7 +10,7 @@ All intermediate generated files go under the configured staging root:
 
 The final Python plot must live inside the corresponding sample archive folder, for example:
 
-`~/GSAS-II_refinement_results/Nb14W3O44_I4m_2405347/NWO514/`
+`~/GSAS-II_refinement_results/reference_structure_key/Sample001/`
 
 Do not use a separate shared folder such as `Python绘图/` as the final location for sample figures. Do not keep plot CSVs, `TIF`, `PDF`, `SVG`, or plot manifest files in the final archive unless the user explicitly asks for them.
 
@@ -38,8 +38,8 @@ GSAS-II_refinement_staging/
 
 `<cif-key>` should classify the result by the refined structure model, for example:
 
-- `Nb14W3O44_I4m_2405347`
-- `Nb14W3O44_I4m_high_entropy_parent`
+- `phase_spacegroup_reference`
+- `parent_structure_reference`
 - `custom_cif_<stem>`
 
 ## Cleanup rule
