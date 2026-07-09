@@ -1,6 +1,6 @@
 ---
 name: gsas-ii-rietveld-refinement
-description: Run careful GSAS-II Rietveld refinement and archive final powder XRD results. Use when the user asks for GSAS-II/GSAS/EXPGUI powder refinement, Rietveld refinement, XRD refinement, CIF-based refinement, Nb14W3O44/Nb-W-O Wadsley-Roth refinement, high-entropy doped Nb14W3O44 refinement, reducing Rwp without distortion, comparing refined cells, organizing final CIF/XRD/GPX/plots/reports, or cleaning intermediate refinement files.
+description: Run careful GSAS-II Rietveld refinement and archive final powder XRD results. Use when the user asks for GSAS-II/GSAS/EXPGUI powder refinement, Rietveld refinement, XRD refinement, CIF-based refinement, complex crystalline material refinement, reducing Rwp without distortion, comparing refined cells, organizing final CIF/XRD/GPX/plots/reports, or cleaning intermediate refinement files.
 ---
 
 # GSAS-II Rietveld Refinement
@@ -18,13 +18,13 @@ Use this skill to refine powder XRD data with a local GSAS-II installation and a
 - Generate publication-style Python Rietveld plots from the final `.gpx` with `scripts/make_rietveld_plot.py`; keep only the final `*_python_rietveld.png` in the sample archive folder.
 - Plot defaults: separate sample plots, `10-60°` range, real GSAS-II HKL labels, and PNG output only.
 - After verifying the final archive, delete the run's process/intermediate files from the skill staging folder. Never delete original source XRD/CIF files.
-- For Nb14W3O44-family samples, default to `I4/m` No. 87 and a trusted parent Nb14W3O44 CIF unless the user supplies a better CIF.
+- Use the user's supplied CIF or a clearly cited trusted reference CIF; never assume a compound-specific default structure model.
 
 ## Required references
 
 Read these as needed:
 
-- `references/workflow.md` for the staged GSAS-II procedure and Nb14W3O44-specific defaults.
+- `references/workflow.md` for the staged GSAS-II procedure and generic structure-model defaults.
 - `references/dialectical-review.md` for the mandatory self-debate gate before selecting a final result.
 - `references/archive-policy.md` before final cleanup or moving results.
 
@@ -37,7 +37,7 @@ Use `scripts/make_rietveld_plot.py` to create reproducible final plots from `.gp
 2. Create a new run staging directory. Never work directly in the final archive.
 3. Build a new `.gpx` from CIF + XRD + instrument parameters. Save an unrefined project snapshot.
 4. Refine in stages: scale/background -> cell -> zero -> U/V/W -> limited candidates such as background order, X/Y, microstrain, size, preferred orientation, or justified phases.
-5. Do not freely refine atom coordinates, oxygen occupancy, Nb/W occupancy, or high-entropy dopant occupancy unless there is independent evidence and constraints.
+5. Do not freely refine atom coordinates, anion occupancy, mixed-site occupancy, dopant occupancy, or defect occupancy unless there is independent evidence and constraints.
 6. Before selecting a final, audit the observed-minus-calculated curve and the full-range fit plot for major positive residual peaks. Low Rwp does not override visibly unexplained peaks.
 7. For each candidate, write a short dialectical review: why the fit improved, why it might be false, and whether it survives.
 8. Select one conservative final and, if useful, one clearly labeled lower-Rwp candidate. Prefer the physically stable result over the lowest Rwp.
@@ -53,7 +53,7 @@ Stop or ask the user before claiming a final structural conclusion when:
 - A residual audit finds large positive observed-minus-calculated peaks that are not accounted for by the current phase model, even when Rwp is numerically low.
 - The imported instrument file has unusual assumptions such as `I(L2)/I(L1)=0` for a Cu Kalpha pattern and no calibrated instrument file was supplied.
 - A candidate lowers Rwp through negative/nonphysical profile terms, severe SVD warnings, 100% parameter correlation, or background swallowing real peaks.
-- The user wants dopant occupancy, Nb/W occupancy, oxygen deficiency, or quantitative phase fractions without constraints and independent composition evidence.
+- The user wants dopant occupancy, mixed-site occupancy, anion deficiency, defect concentration, or quantitative phase fractions without constraints and independent composition evidence.
 - GSAS-II GUI has the same `.gpx` open; tell the user to reopen the saved project rather than saving the stale window.
 
 ## Reporting requirements
