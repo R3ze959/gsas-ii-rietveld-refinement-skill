@@ -10,7 +10,7 @@ EN: A conservative Codex skill for real GSAS-II powder XRD Rietveld refinement, 
 
 This repository publishes a Codex skill that turns GSAS-II refinement into a disciplined, research-facing workflow. It is built for situations where a low Rwp is not enough: the agent must use real GSAS-II, test refinement candidates in stages, inspect residual peaks, reject nonphysical overfitting, keep source data traceable, and archive only the final defensible refinement package.
 
-The skill is designed for powder XRD workflows in materials research, especially Nb14W3O44 and related Wadsley-Roth oxide systems. It helps Codex behave less like an automatic curve-fitting script and more like a cautious refinement assistant that records why a model should or should not be trusted.
+The skill is designed for powder XRD workflows in materials research, especially crystalline materials where phase models, site occupancies, peak broadening, and residual peaks need cautious interpretation. It helps Codex behave less like an automatic curve-fitting script and more like a careful refinement assistant that records why a model should or should not be trusted.
 
 ### What This Skill Does
 
@@ -28,7 +28,7 @@ The skill is designed for powder XRD workflows in materials research, especially
 ### Best For
 
 - GSAS-II / GSAS / EXPGUI-style powder Rietveld refinement.
-- CIF-based refinement of Nb14W3O44, Nb-W-O Wadsley-Roth phases, and high-entropy doped Nb14W3O44-family samples.
+- CIF-based refinement of crystalline materials with complex unit cells, mixed sites, dopants, defects, or uncertain impurity phases.
 - Comparing safe conservative models against exploratory lower-Rwp models.
 - Preparing clean refinement folders for papers, group meetings, or follow-up crystallographic review.
 - Avoiding common overclaims such as proving dopant site occupancy or oxygen deficiency from lab Cu Kalpha XRD alone.
@@ -47,7 +47,7 @@ Bring your own GSAS-II installation, calibrated instrument file, source CIF, and
 
 这个仓库发布的是一个面向 Codex 的 GSAS-II 粉末 XRD 精修 skill。它的目标不是机械地把 Rwp 压低，而是把 GSAS-II 精修变成一个更接近科研判断的流程：真实调用 GSAS-II、分阶段测试候选模型、检查残差峰、拒绝不合理过拟合、保留原始数据来源，并且只归档最终可辩护的精修结果。
 
-它特别适合材料体系的粉末 XRD 精修，尤其是 Nb14W3O44 及相关 Wadsley-Roth 氧化物。这个 skill 会让 Codex 不只是“自动拟合曲线”，而是像一个谨慎的精修助手一样，记录为什么某个模型可信、为什么某个低 Rwp 结果应该被拒绝。
+它适合材料体系的粉末 XRD 精修，尤其是相模型、位点占位、峰展宽和残差峰都需要谨慎解释的复杂晶体材料。这个 skill 会让 Codex 不只是“自动拟合曲线”，而是像一个谨慎的精修助手一样，记录为什么某个模型可信、为什么某个低 Rwp 结果应该被拒绝。
 
 ### 主要功能
 
@@ -65,7 +65,7 @@ Bring your own GSAS-II installation, calibrated instrument file, source CIF, and
 ### 适用场景
 
 - GSAS-II / GSAS / EXPGUI 粉末 Rietveld 精修。
-- 基于 CIF 的 Nb14W3O44、Nb-W-O Wadsley-Roth 相和高熵掺杂 Nb14W3O44 体系精修。
+- 基于 CIF 的复杂晶体材料精修，包括复杂晶胞、混合位点、掺杂、缺陷或不确定杂相。
 - 对比保守模型和探索性低 Rwp 模型。
 - 为论文、组会汇报或后续晶体学复核整理干净的精修文件夹。
 - 避免从普通实验室 Cu Kalpha XRD 中过度声称掺杂位点、氧缺陷或定量相含量。

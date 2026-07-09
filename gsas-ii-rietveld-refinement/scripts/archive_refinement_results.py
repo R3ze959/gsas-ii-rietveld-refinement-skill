@@ -80,7 +80,7 @@ def safe_remove_staging(staging_dir: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-id", required=True)
-    parser.add_argument("--cif-key", required=True, help="Classification folder, e.g. Nb14W3O44_I4m_2405347")
+    parser.add_argument("--cif-key", required=True, help="Classification folder, e.g. phase_spacegroup_reference")
     parser.add_argument("--archive-root", default=str(DEFAULT_ARCHIVE))
     parser.add_argument("--replace", action="store_true", help="Replace an existing final archive for this sample/CIF key")
     parser.add_argument("--cleanup-staging", action="store_true")
