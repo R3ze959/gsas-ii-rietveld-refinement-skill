@@ -2,11 +2,45 @@
 
 **GitHub description / 仓库简介**
 
-EN: A conservative Codex skill for deterministic GSAS-II powder XRD Rietveld refinement, with branched geometry sensitivity, residual auditing, metric validation, and transactional result archiving.
+EN: Two complementary Codex skills for deterministic GSAS-II powder XRD Rietveld refinement and read-only, publication-ready Rietveld plotting.
 
-中文：一个面向真实 GSAS-II 粉末 XRD Rietveld 精修的 Codex skill，强调确定性分支精修、晶胞/Zero 敏感性、残差审查、指标校验和事务型归档；不负责画图。
+中文：两个相互独立的 Codex skill：一个负责真实 GSAS-II 粉末 XRD Rietveld 精修、校验与归档，另一个只读取最终 GPX 并生成可复核的论文风格精修图。
 
 ## Changelog / 更新日志
+
+### v2.1.0 — 2026-07-30
+
+**The independent plotting skill is now included. / 独立精修绘图 Skill 正式加入仓库。**
+
+Version 2.0 separated plotting from refinement but did not yet ship the new
+plotting package in this repository. Version 2.1 completes that split by adding
+the portable `rietveld-plotting` skill beside the refinement skill. Plotting
+loads a final GPX read-only and never runs refinement cycles or saves the
+project.
+
+v2.0 已完成“精修与绘图分离”，但当时仓库尚未附带新的绘图包。v2.1 将可移植的
+`rietveld-plotting` skill 正式加入仓库，与精修 skill 并列存在。绘图只读加载最终
+GPX，不运行精修循环，也不保存或改写工程。
+
+Added / 新增：
+
+- a locked `locked-reference-v1` figure profile with a compact `4.05 × 3.35 inch` canvas and 600 dpi PNG output;
+- background-subtracted observed/calculated display while preserving the unchanged `Observed - Calculated` difference array;
+- unsmoothed `2.05 pt` hollow red experimental markers at 1:1 point density, a black calculated line, a blue difference line, and green Bragg ticks;
+- GPX-derived `Rwp`, `Rp`, and `GOF` in fixed label/equal/value columns;
+- Bragg positions and optional HKL labels read directly from the selected GSAS-II reflection list;
+- mandatory GPX SHA-256 comparison before and after plotting plus visual acceptance checks;
+- portable `GSASII_DIR` and `GSASII_PYTHON` configuration with no private paths, sample data, or user-specific names.
+
+对应中文：
+
+- 锁定的 `locked-reference-v1` 图形规范：`4.05 × 3.35 inch` 紧凑画布和 600 dpi PNG；
+- 默认对观察/计算曲线扣除拟合背景，但保持原始 `Observed - Calculated` 差值数组不变；
+- 1:1 全点显示的 `2.05 pt` 空心红色实验点、黑色计算线、蓝色差值线和绿色 Bragg 短线；
+- 从 GPX 读取 `Rwp`、`Rp`、`GOF`，名称、等号和数值采用固定三列对齐；
+- Bragg 位置和可选 HKL 标签直接读取所选 GSAS-II reflection list；
+- 绘图前后强制比较 GPX SHA-256，并执行成图验收；
+- 使用 `GSASII_DIR` 与 `GSASII_PYTHON` 的可移植配置，不含私人路径、样品数据或用户名。
 
 ### v2.0.0 — 2026-07-30
 
@@ -42,7 +76,7 @@ Added / 新增：
 
 ## English
 
-This repository publishes a Codex skill that turns GSAS-II refinement into a disciplined, research-facing workflow. It is built for situations where a low Rwp is not enough: the agent must use real GSAS-II, test refinement candidates in stages, inspect residual peaks, reject nonphysical overfitting, keep source data traceable, and archive only the final defensible refinement package.
+This repository publishes two complementary Codex skills. `gsas-ii-rietveld-refinement` turns GSAS-II refinement into a disciplined, research-facing workflow. `rietveld-plotting` consumes only a final accepted GPX and generates a locked, publication-ready figure without changing the refinement.
 
 The skill is designed for powder XRD workflows in materials research, especially crystalline materials where phase models, site occupancies, peak broadening, and residual peaks need cautious interpretation. It helps Codex behave less like an automatic curve-fitting script and more like a careful refinement assistant that records why a model should or should not be trusted.
 
@@ -61,6 +95,15 @@ The skill is designed for powder XRD workflows in materials research, especially
 - Archives the exact XRD, instrument file, source/result CIF, GPX/LST, report, and audit JSON transactionally: validate, copy to a sibling temporary directory, hash-check, and atomically install or replace.
 - Does not plot; final `.gpx` files are handed to the separate `rietveld-plotting` skill when requested.
 - Cleans current-run intermediate files only after the final archive is verified, without deleting original XRD or CIF inputs.
+
+### What the Plotting Skill Does
+
+- Loads a final GPX read-only and never invokes refinement or saves the project.
+- Plots every unsmoothed experimental point as a `2.05 pt` hollow red circle.
+- Draws the calculated pattern in black, the unchanged difference curve in blue, and GPX reflection positions in green.
+- Uses a locked compact canvas, aligned GPX-derived fit statistics, and 600 dpi PNG output.
+- Subtracts the fitted background for display by default without altering the difference array or reported statistics.
+- Verifies that the GPX SHA-256 hash is unchanged after rendering.
 
 ### Best For
 
@@ -82,7 +125,7 @@ Bring your own GSAS-II installation, calibrated instrument file, source CIF, and
 
 ## 中文
 
-这个仓库发布的是一个面向 Codex 的 GSAS-II 粉末 XRD 精修 skill。它的目标不是机械地把 Rwp 压低，而是把 GSAS-II 精修变成一个更接近科研判断的流程：真实调用 GSAS-II、分阶段测试候选模型、检查残差峰、拒绝不合理过拟合、保留原始数据来源，并且只归档最终可辩护的精修结果。
+这个仓库发布两个互补的 Codex skill：`gsas-ii-rietveld-refinement` 负责把 GSAS-II 精修变成严格、可追溯的科研流程；`rietveld-plotting` 只读取最终接受的 GPX，并在不改变精修结果的前提下生成锁定样式的论文图。
 
 它适合材料体系的粉末 XRD 精修，尤其是相模型、位点占位、峰展宽和残差峰都需要谨慎解释的复杂晶体材料。这个 skill 会让 Codex 不只是“自动拟合曲线”，而是像一个谨慎的精修助手一样，记录为什么某个模型可信、为什么某个低 Rwp 结果应该被拒绝。
 
@@ -101,6 +144,15 @@ Bring your own GSAS-II installation, calibrated instrument file, source CIF, and
 - 将精确 XRD、仪器文件、源/结果 CIF、GPX/LST、报告和审计 JSON 事务化归档：先验证、复制到同级临时目录、哈希复核，再原子安装或替换。
 - 本 skill 不画图；需要图时把最终 `.gpx` 交给独立的 `rietveld-plotting` skill。
 - 只在最终归档验证后清理当前 run 的中间文件，不删除原始 XRD 或 CIF 输入。
+
+### 绘图 Skill 的功能
+
+- 只读加载最终 GPX，不调用精修，也不保存工程。
+- 以 `2.05 pt` 空心红圆显示每一个未经平滑的实验数据点。
+- 使用黑色计算线、蓝色原始差值线和直接来自 GPX reflection list 的绿色 Bragg 短线。
+- 使用锁定的紧凑画布、三列对齐的 GPX 拟合指标和 600 dpi PNG 输出。
+- 默认仅在显示层扣除拟合背景，不改变差值数组或精修统计。
+- 绘图前后比较 GPX SHA-256，确认工程未被修改。
 
 ### 适用场景
 
@@ -122,16 +174,34 @@ Bring your own GSAS-II installation, calibrated instrument file, source CIF, and
 
 ## Skill Location / Skill 位置
 
-The actual Codex skill lives in:
+The Codex skills live in:
 
 ```text
 gsas-ii-rietveld-refinement/
+rietveld-plotting/
 ```
 
-真正的 Codex skill 位于：
+两个 Codex skill 位于：
 
 ```text
 gsas-ii-rietveld-refinement/
+rietveld-plotting/
+```
+
+## Installation / 安装
+
+Copy either or both skill folders into your Codex skills directory:
+
+```bash
+cp -R gsas-ii-rietveld-refinement "${CODEX_HOME:-$HOME/.codex}/skills/"
+cp -R rietveld-plotting "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
+
+可按需将一个或两个 skill 目录复制到 Codex skills 目录：
+
+```bash
+cp -R gsas-ii-rietveld-refinement "${CODEX_HOME:-$HOME/.codex}/skills/"
+cp -R rietveld-plotting "${CODEX_HOME:-$HOME/.codex}/skills/"
 ```
 
 ## Local Configuration / 本地配置
@@ -148,6 +218,11 @@ Important local configuration:
 - `GSASII_PYTHON`：能导入 `GSASIIscriptable` 的 Python 解释器。
 - `GSASII_REFINEMENT_ARCHIVE`：最终精修结果归档目录，可选。
 - `GSASII_REFINEMENT_STAGING`：精修过程暂存目录，可选。
+
+The plotting skill uses the same `GSASII_DIR` and `GSASII_PYTHON`
+configuration and requires an explicit output directory.
+
+绘图 skill 共用 `GSASII_DIR` 和 `GSASII_PYTHON` 配置，并要求调用时明确提供输出目录。
 
 Example / 示例：
 
