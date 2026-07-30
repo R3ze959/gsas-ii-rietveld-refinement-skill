@@ -2,118 +2,149 @@
 
 ## Local GSAS-II invocation
 
-Use:
+Run bundled scripts with:
 
-```python
-import sys
-sys.path.insert(0, "/path/to/GSAS-II")
-from GSASII import GSASIIscriptable as G2sc
+```bash
+"${GSASII_PYTHON:-python}" \
+  "$CODEX_HOME/skills/gsas-ii-rietveld-refinement/scripts/<script>.py"
 ```
 
-Create a project:
+Set `GSASII_DIR` to the local GSAS-II source tree, or pass `--gsasii-path`.
+Set `GSASII_PYTHON` to the Python interpreter that can load the installation.
+If `CODEX_HOME` is not set, replace the script path with the absolute path to
+the installed skill. Always require the user to provide the instrument file;
+never embed or silently reuse a private `.prm`.
 
-```python
-gpx = G2sc.G2Project(newgpx="/abs/path/staging/Sample_parent_I4m.gpx")
-hist = gpx.add_powder_histogram("/abs/path/sample.txt", "/abs/path/inst_xry.prm")
-phase = gpx.add_phase("/abs/path/model.cif", phasename="Sample parent I4/m", histograms=[hist], fmthint="CIF")
-gpx.save()
-```
-
-Use the user's calibrated Cu Kalpha instrument parameter file when available. If no instrument file is provided, stop and ask for one or state the assumptions explicitly; do not silently substitute an uncalibrated profile.
-
-Audit imported instrument assumptions before final selection. In particular,
-`I(L2)/I(L1)=0` means the Kalpha2 contribution is absent; do not let that pass
-silently for a Cu Kalpha pattern. Either compare against a standard ratio such
-as 0.5, use the user's calibrated instrument file, or state the assumption as a
-reason the refinement may differ from a manual GSAS-II run.
+Preserve fixed-width `.prm` files byte-for-byte. Never regex-rewrite them.
 
 ## Input checks
 
 XRD:
 
-- Confirm two-column `2theta intensity` data.
-- Record angle range, step size, point count, and header lines.
-- Check for negative intensity, discontinuities, obvious low-angle artifacts, or range mismatch.
+- Confirm two-column `2theta intensity` data or provide the correct GSAS-II format hint.
+- Record range, step, point count, header lines, negative intensities, discontinuities, and low-angle artifacts.
 
 CIF:
 
-- Confirm space group, cell, atom labels, occupancy, and formula.
-- Prefer CIF over mol2 for refinement.
-- If using a parent or reference CIF, confirm formula, space group, cell parameters, atom labels, and occupancies match the intended material before refinement.
+- Confirm formula, space group, cell, atom labels, and occupancies.
+- Prefer CIF over mol2.
+- Treat the supplied CIF as a hypothesis to verify, not proof that it is the
+  correct phase model.
 
-## Staged parameter order
+Instrument:
 
-Use this order unless a strong reason says otherwise:
+- Declare `--instrument-profile-status calibrated` only when U/V/W came from a suitable standard measured with the relevant setup.
+- Otherwise declare `uncalibrated`; keep U/V/W locked by default.
+- Audit `I(L2)/I(L1)`. A zero Kalpha2 ratio must not pass silently for a Cu Kalpha pattern.
 
-| Stage | Release | Keep fixed |
-|---|---|---|
-| 0 | none or calculate only | all structure/profile |
-| 1 | scale, background | cell, zero, atom coordinates, occupancy |
-| 2 | cell | atom coordinates, occupancy |
-| 3 | zero | atom coordinates, occupancy |
-| 4 | U/V/W | atom coordinates, occupancy |
-| 5 | background 8 or 10 | atom coordinates, occupancy |
-| 6 | X/Y or microstrain | atom coordinates, occupancy |
-| 7 | preferred orientation or justified phase | occupancy and most coordinates |
-| 8 | atom xyz/Uiso groups | occupancy |
-| 9 | occupancy with constraints only | chemically impossible freedom |
+## Deterministic branched sequence
 
-## Candidate testing
-
-Useful limited candidates:
-
-- Background 8, 10, rarely 12.
-- X/Y if Lorentzian broadening seems needed.
-- Isotropic microstrain for strain-broadened or disorder-broadened samples.
-- Size only if broadening is size-like and stable.
-- Preferred orientation only with systematic family intensity bias.
-- Additional phase only for residual peaks that match a plausible impurity.
-
-Reject:
-
-- Negative X or suspicious negative SH/L as a final recommendation.
-- X/Y + microstrain combinations with 100% correlation.
-- HStrain with SVD singularities unless there is a strong reason and a stable model.
-- Background-only improvements that visibly eat weak peaks.
-- Numerically low Rwp results where the full-range fit plot or residual audit still shows major unexplained observed peaks.
-
-## Residual audit gate
-
-Before calling a refinement final:
-
-- Inspect the full 2theta range, not only the publication plot window.
-- Find the largest positive observed-minus-calculated residual peaks and list their approximate 2theta positions in the report.
-- If those residuals correspond to visible observed peaks without calculated intensity or plausible Bragg ticks, mark the model incomplete instead of claiming the phase explains the main pattern.
-- Do not use low Rwp alone to justify a single-phase result when the background level or weighting hides obvious peak mismatches.
-
-## Final Python plotting
-
-After selecting the final `.gpx`, make the final plot with the bundled script rather than redrawing it manually:
+Preview the exact plan:
 
 ```bash
-${GSASII_PYTHON:-python} /path/to/gsas-ii-rietveld-refinement/scripts/make_rietveld_plot.py \
-  --gpx /abs/path/GSAS-II_refinement_results/<cif-key>/<sample-id>/<sample-id>_refinement.gpx \
-  --sample-id SampleID \
-  --out-dir /abs/path/GSAS-II_refinement_results/<cif-key>/<sample-id> \
-  --x-min 10 --x-max 60 \
-  --panel a
+"${GSASII_PYTHON:-python}" \
+  "$CODEX_HOME/skills/gsas-ii-rietveld-refinement/scripts/run_staged_refinement.py" \
+  --sample-id SAMPLE \
+  --xrd /absolute/sample.xye \
+  --cif /absolute/model.cif \
+  --instrument /absolute/instrument.prm \
+  --instrument-profile-status uncalibrated \
+  --profile-mode locked \
+  --plan-only
 ```
 
-Defaults:
+Run the same command without `--plan-only`. The driver creates:
 
-- Output separate sample figures, not a combined multi-panel figure, unless the user asks for a combined figure.
-- Export only `*_python_rietveld.png` into the same sample archive folder as the final XRD and `.gpx`.
-- Use the GSAS-II reflection list for HKL labels and Bragg positions; do not borrow labels from reference images.
-- Select up to eight intense, separated reflections. HKL labels should stay centered at the real GSAS-II Bragg 2theta positions; avoid sideways label shifts that make a peak label look assigned to the wrong reflection. Use vertical clearance and subtle leader lines when labels need to be lifted above peaks.
-- Use `10-60°` as the default lab-XRD plotting window unless the data range or user request calls for a different range.
-- Hide y-axis numeric labels by default for relative-intensity XRD figures; use `--show-y-values` only when absolute intensity values matter.
-- Do not keep plot CSVs, `TIF`, `PDF`, `SVG`, or plot manifest files in the final archive unless the user explicitly requests them for a specific paper/submission.
-- Do not leave the final figure/data only in a shared folder such as `Python绘图/`; that kind of folder is temporary comparison output, not final archive layout.
+| Candidate | Parent | Released parameters |
+|---|---|---|
+| `01_scale_background` | unrefined | scale, background |
+| `02_cell_only` | scale/background | cell |
+| `03_zero_only` | scale/background | Zero |
+| `04_cell_zero_simultaneous` | scale/background | cell and Zero |
+| `05_cell_then_zero` | cell-only | Zero while retaining cell |
+| `06_zero_then_cell` | Zero-only | cell while retaining Zero |
+| `07_profile_w` or `07_profile_uvw` | chosen geometry branch | profile term(s), only after geometry tests |
 
-## Structure-model defaults
+This branch matrix exposes cell/Zero path dependence and correlation. Do not
+replace it with a single `cell -> Zero -> U/V/W` path.
 
-- Use the space group and starting model from the user-supplied or clearly cited reference CIF.
-- Keep mixed cation or anion occupancy fixed initially unless independent composition or structural evidence supports refinement.
-- Keep defect concentrations fixed unless they are constrained and chemically justified.
-- Treat doped or compositionally complex samples as a parent-average structure first unless the user provides stronger evidence.
-- State that lab Cu Kalpha powder refinement cannot by itself prove exact dopant site occupancy, defect concentration, or full site ordering.
+Rules:
+
+- Use `--profile-mode locked` by default.
+- Use `w` only as a post-geometry candidate when peak-width mismatch remains.
+- Treat `uvw` as exploratory. The driver refuses it for an uncalibrated profile.
+- Keep coordinates, occupancies, Uiso, size, strain, and preferred orientation fixed unless a later candidate is independently justified.
+- Add microstrain, size, preferred orientation, or another phase as separate descendants after this core sequence; never silently add them to the baseline.
+
+## Candidate summary contract
+
+`candidate_summary.json` is mandatory. It records:
+
+- source paths, sizes, and SHA-256 hashes;
+- parent/released parameters for every candidate;
+- Rwp, Rp, R-bkg, wR-bkg, RF, RF², and GOF with explicit sources;
+- cell and instrument values with covariance-derived esds and `value(esd)` formatting;
+- convergence, SVD0, maximum shift/s.u., correlation pairs at or above 80%;
+- LST and recalculated Durbin-Watson values;
+- the largest positive observed-minus-calculated local maxima;
+- warnings and failed/skipped branches.
+
+Do not delete this file when rejected candidate GPX files are cleaned.
+
+## Selection gate
+
+Before selecting a candidate:
+
+1. Compare cell and Zero across all geometry branches.
+2. Reject nonconvergence, SVD warnings, nonpositive profile width, or correlation at or above 95%.
+3. Inspect the largest positive residual peaks across the full range.
+4. Reject background or profile changes that swallow real peaks.
+5. Prefer fewer parameters when Rwp changes are marginal.
+6. Keep occupancies fixed unless constraints and independent composition evidence exist.
+
+## Canonical report and validation
+
+After the dialectical review, materialize the selected files:
+
+```bash
+"${GSASII_PYTHON:-python}" \
+  "$CODEX_HOME/skills/gsas-ii-rietveld-refinement/scripts/select_refinement_candidate.py" \
+  --candidate-summary /absolute/candidate_summary.json \
+  --candidate 07_profile_w
+```
+
+This safety-gates the candidate, copies its GPX/LST, exports the result CIF, and
+binds their hashes into `candidate_summary.json`. Then generate the report:
+
+```bash
+"${GSASII_PYTHON:-python}" \
+  "$CODEX_HOME/skills/gsas-ii-rietveld-refinement/scripts/build_validate_refinement_report.py" \
+  --candidate-summary /absolute/candidate_summary.json \
+  --write-report /absolute/SAMPLE_report.md \
+  --validation-output /absolute/report_validation.json
+```
+
+The report builder:
+
+- labels profile residuals as `Rwp`, `Rp`, `R-bkg`, and `wR-bkg`;
+- labels Bragg residuals separately as `RF` and `RF²`;
+- refuses ambiguous `Rb`/`wRb` wording;
+- formats crystallographic uncertainties from GPX covariance;
+- embeds a machine-verifiable metrics block.
+
+Archive only when `report_validation.json` has `status=pass`.
+
+## Plotting boundary
+
+- Do not create, restyle, copy, or archive a Rietveld figure.
+- Preserve the final GPX arrays and reflection lists for the separate `rietveld-plotting` skill.
+
+## Structural-model boundary
+
+- Use the space group, symmetry setting, and composition in the supplied CIF
+  only after checking them against the experimental context.
+- Keep coordinates, elemental occupancies, and vacancy content fixed initially.
+- Use an average parent structure for substituted materials only when it is a
+  stated hypothesis, not a hidden default.
+- State that laboratory powder XRD alone generally cannot prove dopant identity,
+  incorporation, or site occupancy.
