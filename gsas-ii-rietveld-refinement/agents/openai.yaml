@@ -1,6 +1,4 @@
 interface:
   display_name: "GSAS-II Rietveld Refinement"
-  short_description: "稳健粉末精修、Python 精修图与最终归档"
-  default_prompt: "Use $gsas-ii-rietveld-refinement to refine my powder XRD data with GSAS-II and archive the final CIF, XRD data, publication-style Python plots, and report."
-policy:
-  allow_implicit_invocation: true
+  short_description: "Single and sequential GSAS-II refinement; no plots"
+  default_prompt: "Use $gsas-ii-rietveld-refinement to run a staged single-pattern or operando sequential GSAS-II refinement, audit it, and preserve the non-plotting result."

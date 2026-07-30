@@ -20,9 +20,9 @@ Use this table for each candidate:
 | Rwp/Rp improves meaningfully |  | Compare against conservative baseline |
 | Residual shape improves |  | Look at strong peaks and low-angle region |
 | Bragg ticks explain peaks |  | Do not ignore unexplained peaks |
-| Cell parameters remain plausible |  | Compare parent and doped samples |
+| Cell parameters remain plausible |  | Compare the source model and related samples |
 | Profile terms remain physical |  | Reject negative or extreme terms unless justified |
-| Parameter correlations acceptable |  | Read `.lst`; reject 100% correlation/SVD final candidates |
+| Parameter correlations acceptable |  | Use `candidate_summary.json`; treat absolute correlation ≥95% or SVD warnings as reject/exploratory |
 | Chemistry is respected |  | No free occupancy without constraints |
 | Evidence boundary is clear |  | Do not overclaim dopant site or oxygen defects |
 
@@ -37,11 +37,16 @@ Use one of:
 
 If two candidates have nearly identical Rwp, choose the one with fewer parameters and fewer warnings.
 
+Compare cell-only, Zero-only, simultaneous cell+Zero, cell-then-Zero, and
+Zero-then-cell candidates before discussing profile broadening. Large
+path-dependent cell/Zero changes are an instrument/geometry warning, not a
+reason to release more profile variables.
+
 ## Report wording
 
 Use cautious language:
 
-- "The parent `I4/m` model explains the main peaks."
+- "The supplied structural model explains the main peaks."
 - "The refined cell suggests an average lattice change."
 - "Microstrain is a peak-broadening model and a clue for local distortion, not direct quantitative proof."
 - "This refinement does not prove dopant site occupancy without independent composition/structure evidence."

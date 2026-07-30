@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create publication-style Rietveld plots directly from a GSAS-II GPX file."""
+"""Create reference-inspired Rietveld plots read-only from a final GSAS-II GPX."""
 
 from __future__ import annotations
 
@@ -16,8 +16,32 @@ from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 import numpy as np
 
 
-DEFAULT_GSASII = Path(os.environ.get("GSASII_DIR", "~/g2main/GSAS-II")).expanduser()
+DEFAULT_GSASII = Path(
+    os.environ.get("GSASII_DIR", Path.home() / "g2main" / "GSAS-II")
+)
 DEFAULT_FORMATS = ("png",)
+STYLE_PROFILE = "locked-reference-v1"
+DEFAULT_X_MIN = 10.0
+DEFAULT_X_MAX = 60.0
+DEFAULT_FIGURE_WIDTH = 4.05
+DEFAULT_FIGURE_HEIGHT = 3.35
+DEFAULT_MARKER_STEP = 1
+OUTPUT_DPI = 600
+EXPERIMENTAL_MARKER_SIZE = 2.05
+EXPERIMENTAL_COLOR = "#d62728"
+CALCULATION_COLOR = "black"
+DIFFERENCE_COLOR = "#1f4ed8"
+BRAGG_COLOR = "#1b9e77"
+CALCULATION_LINE_WIDTH = 0.48
+DIFFERENCE_LINE_WIDTH = 0.50
+BRAGG_LINE_WIDTH = 0.45
+LEGEND_FONT_SIZE = 5.8
+FIT_STATISTICS_FONT_SIZE = 5.8
+FIT_STATISTICS_LABEL_X = 0.835
+FIT_STATISTICS_EQUALS_X = 0.895
+FIT_STATISTICS_VALUE_X = 0.915
+FIT_STATISTICS_TOP_Y = 0.735
+FIT_STATISTICS_ROW_STEP = 0.044
 
 
 def load_gsasii(gsasii_dir: Path):
@@ -54,6 +78,11 @@ def configure_style() -> None:
             "font.family": "sans-serif",
             "font.sans-serif": [base_font],
             "font.size": 6,
+            "mathtext.fontset": "custom",
+            "mathtext.rm": base_font,
+            "mathtext.it": base_font,
+            "mathtext.bf": base_font,
+            "mathtext.sf": base_font,
             "axes.labelsize": 8.5,
             "axes.linewidth": 1.0,
             "xtick.labelsize": 7,
@@ -91,6 +120,33 @@ def extract_profile(hist) -> dict[str, np.ndarray]:
         "CalculatedLine": arr[3],
         "Background": arr[4],
         "Difference": arr[5],
+    }
+
+
+def extract_fit_statistics(gpx, hist) -> dict[str, float | None]:
+    """Read accurately named whole-pattern statistics without changing the GPX."""
+    rvals = gpx["Covariance"]["data"].get("Rvals", {})
+    residuals = hist.residuals
+    return {
+        "Rwp": (
+            float(rvals["Rwp"])
+            if rvals.get("Rwp") is not None
+            else (
+                float(residuals["wR"])
+                if residuals.get("wR") is not None
+                else None
+            )
+        ),
+        "Rp": (
+            float(residuals["R"])
+            if residuals.get("R") is not None
+            else None
+        ),
+        "GOF": (
+            float(rvals["GOF"])
+            if rvals.get("GOF") is not None
+            else None
+        ),
     }
 
 
@@ -135,12 +191,14 @@ def select_peak_labels(
 
 def local_profile_peak_y(plot_data: dict[str, np.ndarray], two_theta: float, x_window: float) -> float:
     x = plot_data["TwoTheta"]
+    calculated = plot_data["DisplayCalculated"]
+    observed = plot_data["DisplayObserved"]
     near_peak = np.abs(x - two_theta) <= x_window
     if not np.any(near_peak):
         idx = int(np.nanargmin(np.abs(x - two_theta)))
-        return float(plot_data["CalculatedLine"][idx])
-    calc_y = float(np.nanmax(plot_data["CalculatedLine"][near_peak]))
-    obs_y = float(np.nanmax(plot_data["Observed"][near_peak]))
+        return float(calculated[idx])
+    calc_y = float(np.nanmax(calculated[near_peak]))
+    obs_y = float(np.nanmax(observed[near_peak]))
     return max(calc_y, obs_y)
 
 
@@ -160,8 +218,8 @@ def label_positions(
     y_max = float(plot_data["YMax"][0])
     y_range = y_max - y_min
     x_visible = (plot_data["TwoTheta"] >= x_min) & (plot_data["TwoTheta"] <= x_max)
-    data_floor = float(np.nanmin(plot_data["Observed"][x_visible]))
-    data_ceiling = float(np.nanmax(plot_data["Observed"][x_visible]))
+    data_floor = float(np.nanmin(plot_data["DisplayObserved"][x_visible]))
+    data_ceiling = float(np.nanmax(plot_data["DisplayObserved"][x_visible]))
     data_span = data_ceiling - data_floor
     x_range = x_max - x_min
     peak_window = max(0.10, 0.0035 * x_range)
@@ -199,36 +257,46 @@ def prepare_plot_data(
     x_min: float,
     x_max: float,
     marker_step: int,
+    subtract_background: bool,
 ) -> dict[str, np.ndarray]:
     x = profile["TwoTheta"]
     visible = (x >= x_min) & (x <= x_max)
     if not np.any(visible):
         raise SystemExit("Requested x range does not overlap histogram data")
 
-    observed = profile["Observed"]
-    y_min = float(np.nanmin(observed[visible]))
-    y_max = float(np.nanmax(observed[visible]))
+    if subtract_background:
+        display_observed = profile["Observed"] - profile["Background"]
+        display_calculated = profile["CalculatedLine"] - profile["Background"]
+    else:
+        display_observed = profile["Observed"]
+        display_calculated = profile["CalculatedLine"]
+
+    y_min = float(np.nanmin(display_observed[visible]))
+    y_max = float(np.nanmax(display_observed[visible]))
     span = y_max - y_min
     if span <= 0:
         raise SystemExit("Observed intensity span is zero; cannot scale plot")
 
-    calc_markers = np.full_like(profile["CalculatedLine"], np.nan)
+    experimental_markers = np.full_like(profile["Observed"], np.nan)
     step = max(1, marker_step)
-    calc_markers[::step] = profile["CalculatedLine"][::step]
+    sampled_mask = visible & ((np.arange(x.size) % step) == 0)
+    experimental_markers[sampled_mask] = display_observed[sampled_mask]
 
-    error_offset = y_min - 0.18 * span
-    tick_base = y_min - 0.31 * span
-    tick_top = y_min - 0.26 * span
+    difference_offset = y_min - 0.24 * span
+    tick_base = y_min - 0.14 * span
+    tick_top = y_min - 0.09 * span
 
     bragg_positions = np.asarray(sorted({round(float(row["two_theta"]), 5) for row in reflections}), dtype=float)
     return {
         **profile,
-        "CalculatedMarkers": calc_markers,
-        "ErrorOffset": profile["Difference"] + error_offset,
+        "DisplayObserved": display_observed,
+        "DisplayCalculated": display_calculated,
+        "ExperimentalMarkers": experimental_markers,
+        "DifferenceOffset": profile["Difference"] + difference_offset,
         "BraggTwoTheta": bragg_positions,
         "BraggY0": np.full_like(bragg_positions, tick_base),
         "BraggY1": np.full_like(bragg_positions, tick_top),
-        "YMin": np.asarray([tick_base - 0.08 * span]),
+        "YMin": np.asarray([difference_offset - 0.09 * span]),
         "YMax": np.asarray([y_max + 0.24 * span]),
     }
 
@@ -236,76 +304,96 @@ def prepare_plot_data(
 def plot_rietveld(
     plot_data: dict[str, np.ndarray],
     labels: list[dict[str, object]],
+    statistics: dict[str, float | None],
     x_min: float,
     x_max: float,
     panel: str | None,
     show_y_values: bool,
+    show_hkl_labels: bool,
+    show_fit_statistics: bool,
+    figure_width: float,
+    figure_height: float,
 ) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(6.65, 3.05), dpi=200)
+    fig, ax = plt.subplots(figsize=(figure_width, figure_height), dpi=200)
 
     x = plot_data["TwoTheta"]
     y_min = float(plot_data["YMin"][0])
     y_max = float(plot_data["YMax"][0])
     y_range = y_max - y_min
 
-    ax.plot(x, plot_data["Observed"], color="#111111", lw=0.50, label="Observed", zorder=3)
-
-    mask = np.isfinite(plot_data["CalculatedMarkers"])
+    marker_mask = np.isfinite(plot_data["ExperimentalMarkers"])
     ax.plot(
-        x[mask],
-        plot_data["CalculatedMarkers"][mask],
+        x[marker_mask],
+        plot_data["ExperimentalMarkers"][marker_mask],
         linestyle="None",
         marker="o",
-        markersize=1.25,
-        markerfacecolor="white",
-        markeredgecolor="#d83a3a",
-        markeredgewidth=0.30,
-        label="Calculated",
-        zorder=4,
+        markersize=EXPERIMENTAL_MARKER_SIZE,
+        markerfacecolor="none",
+        markeredgecolor=EXPERIMENTAL_COLOR,
+        markeredgewidth=0.38,
+        label="Experimental",
+        zorder=2,
     )
 
-    ax.plot(x, plot_data["ErrorOffset"], color="#1f3fd4", lw=0.45, label="Error", zorder=2)
+    ax.plot(
+        x,
+        plot_data["DisplayCalculated"],
+        color=CALCULATION_COLOR,
+        lw=CALCULATION_LINE_WIDTH,
+        label="Calculation",
+        zorder=3,
+    )
+
+    ax.plot(
+        x,
+        plot_data["DifferenceOffset"],
+        color=DIFFERENCE_COLOR,
+        lw=DIFFERENCE_LINE_WIDTH,
+        label="Difference",
+        zorder=2,
+    )
     ax.vlines(
         plot_data["BraggTwoTheta"],
         plot_data["BraggY0"],
         plot_data["BraggY1"],
-        color="#70bd8a",
-        lw=0.40,
-        label="Bragg-position",
+        color=BRAGG_COLOR,
+        lw=BRAGG_LINE_WIDTH,
+        label="Bragg position",
         zorder=1,
     )
 
-    for item in label_positions(plot_data, labels, x_min, x_max):
-        text_x = float(item["label_x"])
-        text_y = float(item["label_y"])
-        peak_y = float(item["peak_y"])
-        if text_y - peak_y > 0.035 * y_range:
-            ax.plot(
-                [text_x, text_x],
-                [peak_y + 0.006 * y_range, text_y - 0.006 * y_range],
-                color="#777777",
-                lw=0.28,
-                alpha=0.70,
-                zorder=5,
-                solid_capstyle="round",
+    if show_hkl_labels:
+        for item in label_positions(plot_data, labels, x_min, x_max):
+            text_x = float(item["label_x"])
+            text_y = float(item["label_y"])
+            peak_y = float(item["peak_y"])
+            if text_y - peak_y > 0.035 * y_range:
+                ax.plot(
+                    [text_x, text_x],
+                    [peak_y + 0.006 * y_range, text_y - 0.006 * y_range],
+                    color="#777777",
+                    lw=0.28,
+                    alpha=0.70,
+                    zorder=5,
+                    solid_capstyle="round",
+                )
+            ax.text(
+                text_x,
+                text_y,
+                str(item["label"]),
+                rotation=90,
+                ha="center",
+                va="bottom",
+                fontsize=5.2,
+                color="black",
+                clip_on=True,
+                zorder=6,
             )
-        ax.text(
-            text_x,
-            text_y,
-            str(item["label"]),
-            rotation=90,
-            ha="center",
-            va="bottom",
-            fontsize=5.2,
-            color="black",
-            clip_on=True,
-            zorder=6,
-        )
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     ax.set_xlabel(r"2$\theta$ (Degree)")
-    ax.set_ylabel("Intensity")
+    ax.set_ylabel("Intensity (a.u.)")
     ax.xaxis.set_major_locator(MultipleLocator(10))
     ax.xaxis.set_minor_locator(MultipleLocator(5))
     ax.yaxis.set_minor_locator(AutoMinorLocator(2))
@@ -320,37 +408,76 @@ def plot_rietveld(
         spine.set_color("black")
 
     legend_handles = [
-        Line2D([0], [0], color="#111111", lw=1.0, label="Observed"),
         Line2D(
             [0],
             [0],
             linestyle="None",
             marker="o",
-            markersize=2.8,
-            markerfacecolor="white",
-            markeredgecolor="#d83a3a",
-            markeredgewidth=0.45,
-            label="Calculated",
+            markersize=EXPERIMENTAL_MARKER_SIZE,
+            markerfacecolor="none",
+            markeredgecolor=EXPERIMENTAL_COLOR,
+            markeredgewidth=0.55,
+            color=EXPERIMENTAL_COLOR,
+            label="Experimental",
         ),
-        Line2D([0], [0], color="#1f3fd4", lw=1.0, label="Error"),
-        Line2D([0], [0], linestyle="None", marker="|", markersize=6, markeredgewidth=0.9, color="#38b96f", label="Bragg-position"),
+        Line2D([0], [0], color=CALCULATION_COLOR, lw=1.0, label="Calculation"),
+        Line2D([0], [0], color=DIFFERENCE_COLOR, lw=1.0, label="Difference"),
+        Line2D([0], [0], linestyle="None", marker="|", markersize=6, markeredgewidth=0.9, color=BRAGG_COLOR, label="Bragg position"),
     ]
     ax.legend(
         handles=legend_handles,
         loc="upper right",
         bbox_to_anchor=(0.985, 0.98),
         frameon=False,
-        fontsize=5.8,
+        fontsize=LEGEND_FONT_SIZE,
         handlelength=1.25,
         handletextpad=0.38,
         borderaxespad=0.0,
         labelspacing=0.28,
     )
 
+    if show_fit_statistics:
+        statistic_rows: list[tuple[str, str]] = []
+        if statistics.get("Rwp") is not None:
+            statistic_rows.append(
+                (
+                    r"$\mathsf{R_{wp}}$",
+                    rf"$\mathsf{{{float(statistics['Rwp']):.2f}\%}}$",
+                )
+            )
+        if statistics.get("Rp") is not None:
+            statistic_rows.append(
+                (
+                    r"$\mathsf{R_p}$",
+                    rf"$\mathsf{{{float(statistics['Rp']):.2f}\%}}$",
+                )
+            )
+        if statistics.get("GOF") is not None:
+            statistic_rows.append(
+                (
+                    r"$\mathsf{GOF}$",
+                    rf"$\mathsf{{{float(statistics['GOF']):.2f}}}$",
+                )
+            )
+        for row_index, (label_text, value_text) in enumerate(statistic_rows):
+            y_position = FIT_STATISTICS_TOP_Y - row_index * FIT_STATISTICS_ROW_STEP
+            common_style = {
+                "transform": ax.transAxes,
+                "va": "top",
+                "fontsize": FIT_STATISTICS_FONT_SIZE,
+                "fontfamily": "sans-serif",
+                "fontweight": "normal",
+                "color": "black",
+                "zorder": 7,
+            }
+            ax.text(FIT_STATISTICS_LABEL_X, y_position, label_text, ha="left", **common_style)
+            ax.text(FIT_STATISTICS_EQUALS_X, y_position, r"$=$", ha="center", **common_style)
+            ax.text(FIT_STATISTICS_VALUE_X, y_position, value_text, ha="left", **common_style)
+
     if panel:
         ax.text(-0.065, 1.035, panel, transform=ax.transAxes, ha="left", va="bottom", fontsize=12, fontweight="bold", clip_on=False)
 
-    fig.subplots_adjust(left=0.085, right=0.985, bottom=0.17, top=0.955)
+    fig.subplots_adjust(left=0.13, right=0.975, bottom=0.16, top=0.965)
     return fig
 
 
@@ -361,7 +488,7 @@ def save_formats(fig: plt.Figure, out_dir: Path, stem: str, formats: list[str]) 
         if suffix not in {"png", "tif", "tiff", "pdf", "svg"}:
             raise SystemExit(f"Unsupported output format: {fmt_name}")
         path = out_dir / f"{stem}.{suffix}"
-        kwargs = {"dpi": 600} if suffix in {"png", "tif", "tiff"} else {}
+        kwargs = {"dpi": OUTPUT_DPI} if suffix in {"png", "tif", "tiff"} else {}
         fig.savefig(path, bbox_inches="tight", pad_inches=0.03, **kwargs)
         outputs[suffix] = str(path)
     return outputs
@@ -375,14 +502,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stem", help="Exact output stem; defaults to <sample-id>_python_rietveld")
     parser.add_argument("--histogram-index", type=int, default=0)
     parser.add_argument("--gsasii-dir", default=str(DEFAULT_GSASII))
-    parser.add_argument("--x-min", type=float, default=10.0)
-    parser.add_argument("--x-max", type=float, default=60.0)
-    parser.add_argument("--marker-step", type=int, default=4)
+    parser.add_argument("--x-min", type=float, default=DEFAULT_X_MIN)
+    parser.add_argument("--x-max", type=float, default=DEFAULT_X_MAX)
+    parser.add_argument("--figure-width", type=float, default=DEFAULT_FIGURE_WIDTH, help="Figure width in inches")
+    parser.add_argument("--figure-height", type=float, default=DEFAULT_FIGURE_HEIGHT, help="Figure height in inches")
+    parser.add_argument(
+        "--marker-step",
+        type=int,
+        default=DEFAULT_MARKER_STEP,
+        help="Plot every Nth experimental marker; default 1 shows every measured point",
+    )
+    parser.add_argument(
+        "--include-background",
+        action="store_true",
+        help="Display observed and calculated intensities with the fitted background included",
+    )
     parser.add_argument("--max-labels", type=int, default=8)
     parser.add_argument("--label-separation", type=float, default=1.8)
+    parser.add_argument(
+        "--show-hkl-labels",
+        action="store_true",
+        help="Show selected HKL text labels; hidden by default",
+    )
+    parser.add_argument(
+        "--hide-fit-statistics",
+        action="store_true",
+        help="Hide the Rwp, Rp, and GOF block",
+    )
     parser.add_argument("--panel", help="Optional panel letter such as a or b")
     parser.add_argument("--show-y-values", action="store_true")
-    parser.add_argument("--formats", default=",".join(DEFAULT_FORMATS), help="Comma-separated formats; final archives should use png only")
+    parser.add_argument("--formats", default=",".join(DEFAULT_FORMATS), help="Comma-separated formats; keep PNG only by default")
     parser.add_argument("--write-plot-manifest", action="store_true", help="Debug option: write a plot manifest JSON beside the image")
     return parser.parse_args()
 
@@ -391,6 +540,10 @@ def main() -> int:
     args = parse_args()
     if args.x_max <= args.x_min:
         raise SystemExit("--x-max must be greater than --x-min")
+    if args.figure_width <= 0 or args.figure_height <= 0:
+        raise SystemExit("--figure-width and --figure-height must be positive")
+    if args.marker_step < 1:
+        raise SystemExit("--marker-step must be an integer of 1 or greater")
 
     gpx_path = Path(args.gpx).expanduser().resolve()
     if not gpx_path.is_file():
@@ -408,21 +561,75 @@ def main() -> int:
 
     configure_style()
     profile = extract_profile(hist)
+    statistics = extract_fit_statistics(gpx, hist)
     reflections = extract_reflections(hist, args.x_min, args.x_max)
     labels = select_peak_labels(reflections, args.max_labels, args.label_separation)
-    plot_data = prepare_plot_data(profile, reflections, args.x_min, args.x_max, args.marker_step)
+    plot_data = prepare_plot_data(
+        profile,
+        reflections,
+        args.x_min,
+        args.x_max,
+        args.marker_step,
+        not args.include_background,
+    )
 
-    fig = plot_rietveld(plot_data, labels, args.x_min, args.x_max, args.panel, args.show_y_values)
+    fig = plot_rietveld(
+        plot_data,
+        labels,
+        statistics,
+        args.x_min,
+        args.x_max,
+        args.panel,
+        args.show_y_values,
+        args.show_hkl_labels,
+        not args.hide_fit_statistics,
+        args.figure_width,
+        args.figure_height,
+    )
     image_outputs = save_formats(fig, out_dir, stem, formats)
     plt.close(fig)
 
-    result = {"outputs": image_outputs}
+    result = {
+        "style_profile": STYLE_PROFILE,
+        "outputs": image_outputs,
+    }
     if args.write_plot_manifest:
         manifest = {
             "gpx": str(gpx_path),
             "histogram": hist.name,
             "sample_id": sample_id,
+            "style_profile": STYLE_PROFILE,
             "x_range": [args.x_min, args.x_max],
+            "statistics": statistics,
+            "style": {
+                "experimental": {
+                    "description": "uniform raw hollow red markers",
+                    "marker_size_pt": EXPERIMENTAL_MARKER_SIZE,
+                    "marker_step": args.marker_step,
+                    "connecting_line": False,
+                    "smoothed": False,
+                },
+                "calculation": {
+                    "color": CALCULATION_COLOR,
+                    "line_width_pt": CALCULATION_LINE_WIDTH,
+                },
+                "difference": {
+                    "color": DIFFERENCE_COLOR,
+                    "line_width_pt": DIFFERENCE_LINE_WIDTH,
+                },
+                "bragg_positions": {
+                    "color": BRAGG_COLOR,
+                    "line_width_pt": BRAGG_LINE_WIDTH,
+                },
+                "fit_statistics": {
+                    "font_size_pt": FIT_STATISTICS_FONT_SIZE,
+                    "layout": "fixed label, equals-sign, and value columns",
+                },
+                "hkl_labels": bool(args.show_hkl_labels),
+                "background_subtracted": not args.include_background,
+                "figure_inches": [args.figure_width, args.figure_height],
+                "output_dpi": OUTPUT_DPI,
+            },
             "outputs": image_outputs,
             "labels": [
                 {
