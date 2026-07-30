@@ -6,18 +6,25 @@ EN: A conservative Codex skill for deterministic GSAS-II powder XRD Rietveld ref
 
 中文：一个面向真实 GSAS-II 粉末 XRD Rietveld 精修的 Codex skill，强调确定性分支精修、晶胞/Zero 敏感性、残差审查、指标校验和事务型归档；不负责画图。
 
-## Update: Refinement and Plotting Are Now Separate / 更新：精修与绘图拆分
+## Changelog / 更新日志
 
-This release narrows the skill to refinement, validation, and archival work.
+### v2.0.0 — 2026-07-30
+
+**Breaking change: refinement and plotting are now separate. / 破坏性更新：精修与绘图现已拆分。**
+
+This version narrows the skill to refinement, validation, and archival work.
 Rietveld figure generation and restyling have moved to the independent
-`rietveld-plotting` skill. The split prevents presentation choices from
-changing refinement parameters and makes each workflow easier to audit.
+`rietveld-plotting` skill. Existing workflows that called
+`make_rietveld_plot.py` from this repository must migrate their plotting step
+to that skill. The split prevents presentation choices from changing
+refinement parameters and makes each workflow easier to audit.
 
-本次更新将此 skill 明确限定为精修、校验与归档。Rietveld 图的生成和样式调整已
-拆分到独立的 `rietveld-plotting` skill。这样可以避免绘图阶段意外修改精修参数，
-也便于分别复核数值结果与图形表达。
+本版本将此 skill 明确限定为精修、校验与归档。Rietveld 图的生成和样式调整已
+拆分到独立的 `rietveld-plotting` skill。原先从本仓库调用
+`make_rietveld_plot.py` 的流程，需要将绘图步骤迁移到该 skill。这样可以避免
+绘图阶段意外修改精修参数，也便于分别复核数值结果与图形表达。
 
-This release also adds:
+Added / 新增：
 
 - a deterministic cell/Zero branch matrix instead of a single release order;
 - a retained `candidate_summary.json` with hashes and fit diagnostics;
@@ -25,7 +32,7 @@ This release also adds:
 - transactional archive replacement with rollback and hash verification;
 - portable configuration with no private data or machine-specific paths.
 
-本次更新还加入：
+对应中文：
 
 - 确定性的晶胞/Zero 分支比较，不再只走一条依次释放路径；
 - 保留含哈希和拟合诊断的 `candidate_summary.json`；
