@@ -2,9 +2,36 @@
 
 **GitHub description / 仓库简介**
 
-EN: A conservative Codex skill for real GSAS-II powder XRD Rietveld refinement, with staged parameter control, residual-peak auditing, defensible result archiving, and reproducible publication-style refinement plots.
+EN: A conservative Codex skill for deterministic GSAS-II powder XRD Rietveld refinement, with branched geometry sensitivity, residual auditing, metric validation, and transactional result archiving.
 
-中文：一个面向真实 GSAS-II 粉末 XRD Rietveld 精修的 Codex skill，强调分阶段放参、残差峰审查、可辩护结果归档和可复现的论文风格精修图。
+中文：一个面向真实 GSAS-II 粉末 XRD Rietveld 精修的 Codex skill，强调确定性分支精修、晶胞/Zero 敏感性、残差审查、指标校验和事务型归档；不负责画图。
+
+## Update: Refinement and Plotting Are Now Separate / 更新：精修与绘图拆分
+
+This release narrows the skill to refinement, validation, and archival work.
+Rietveld figure generation and restyling have moved to the independent
+`rietveld-plotting` skill. The split prevents presentation choices from
+changing refinement parameters and makes each workflow easier to audit.
+
+本次更新将此 skill 明确限定为精修、校验与归档。Rietveld 图的生成和样式调整已
+拆分到独立的 `rietveld-plotting` skill。这样可以避免绘图阶段意外修改精修参数，
+也便于分别复核数值结果与图形表达。
+
+This release also adds:
+
+- a deterministic cell/Zero branch matrix instead of a single release order;
+- a retained `candidate_summary.json` with hashes and fit diagnostics;
+- automatic R-factor label and covariance-derived uncertainty validation;
+- transactional archive replacement with rollback and hash verification;
+- portable configuration with no private data or machine-specific paths.
+
+本次更新还加入：
+
+- 确定性的晶胞/Zero 分支比较，不再只走一条依次释放路径；
+- 保留含哈希和拟合诊断的 `candidate_summary.json`；
+- 自动核验 R 因子标签及由协方差生成的不确定度；
+- 带回滚和哈希复核的事务型归档替换；
+- 不含私人数据或个人电脑绝对路径的可移植配置。
 
 ## English
 
@@ -16,13 +43,16 @@ The skill is designed for powder XRD workflows in materials research, especially
 
 - Runs real GSAS-II workflows through `GSASIIscriptable`; it does not present simulated patterns as refinement.
 - Builds `.gpx` projects from XRD data, CIF structure models, and instrument parameter files.
-- Applies staged refinement logic: scale/background, cell, zero shift, profile terms, and only then justified extra models.
+- Runs a fixed branch matrix after scale/background: cell-only, Zero-only, simultaneous cell+Zero, cell-then-Zero, and Zero-then-cell.
+- Locks instrument U/V/W first and releases profile terms only after geometry sensitivity; uncalibrated free U/V/W is refused.
 - Keeps chemically sensitive parameters restrained by default, including atomic coordinates, occupancies, dopant sites, and oxygen deficiency.
 - Audits the full-range observed-minus-calculated curve before accepting a final result.
 - Compares conservative and lower-Rwp candidates, then rejects unstable, correlated, or nonphysical fits.
 - Requires a short dialectical review so each candidate is judged by fit quality, chemistry, residual shape, and reviewer risk.
-- Generates reproducible Python Rietveld plots from final `.gpx` files, including GSAS-II-derived Bragg positions and HKL labels.
-- Archives final deliverables together: XRD data, source/result CIF, selected `.gpx`, `.lst`, report, plot, and manifest.
+- Retains `candidate_summary.json` with source hashes, correlations, Durbin-Watson values, residual maxima, and failed branches.
+- Generates and validates canonical reports with unambiguous R-bkg/RF labels and covariance-derived `value(esd)` formatting.
+- Archives the exact XRD, instrument file, source/result CIF, GPX/LST, report, and audit JSON transactionally: validate, copy to a sibling temporary directory, hash-check, and atomically install or replace.
+- Does not plot; final `.gpx` files are handed to the separate `rietveld-plotting` skill when requested.
 - Cleans current-run intermediate files only after the final archive is verified, without deleting original XRD or CIF inputs.
 
 ### Best For
@@ -53,13 +83,16 @@ Bring your own GSAS-II installation, calibrated instrument file, source CIF, and
 
 - 通过 `GSASIIscriptable` 调用真实 GSAS-II；不把模拟图谱包装成精修结果。
 - 根据 XRD 数据、CIF 结构模型和仪器参数文件建立 `.gpx` 项目。
-- 按阶段放开参数：scale/background、晶胞、zero shift、峰形参数，再考虑有依据的额外模型。
+- 在 scale/background 后固定运行晶胞-only、Zero-only、晶胞+Zero 同时、晶胞后 Zero、Zero 后晶胞五条分支。
+- 先锁定仪器 U/V/W，再根据几何敏感性决定是否测试峰形；未标定仪器禁止自由 U/V/W。
 - 默认约束化学敏感参数，包括原子坐标、占位、掺杂位点和氧缺陷。
 - 在接受最终结果前审查全范围 observed-minus-calculated 残差曲线。
 - 对比保守模型和低 Rwp 候选模型，拒绝不稳定、高相关或非物理的拟合。
 - 要求写出简短的“辩证审查”，从拟合质量、化学合理性、残差形状和审稿风险判断候选模型。
-- 从最终 `.gpx` 文件生成可复现的 Python 精修图，Bragg 位置和 HKL 标签来自 GSAS-II 反射列表。
-- 将最终交付物集中归档：XRD 数据、源/结果 CIF、选定 `.gpx`、`.lst`、报告、精修图和 manifest。
+- 保留 `candidate_summary.json`，记录源文件哈希、相关矩阵、Durbin–Watson、残差峰和失败分支。
+- 自动生成并校验规范报告，明确区分 R-bkg 与 RF，并从协方差生成 `value(esd)`。
+- 将精确 XRD、仪器文件、源/结果 CIF、GPX/LST、报告和审计 JSON 事务化归档：先验证、复制到同级临时目录、哈希复核，再原子安装或替换。
+- 本 skill 不画图；需要图时把最终 `.gpx` 交给独立的 `rietveld-plotting` skill。
 - 只在最终归档验证后清理当前 run 的中间文件，不删除原始 XRD 或 CIF 输入。
 
 ### 适用场景
@@ -112,8 +145,8 @@ Important local configuration:
 Example / 示例：
 
 ```bash
-export GSASII_DIR="$HOME/g2main/GSAS-II"
-export GSASII_PYTHON="$HOME/g2main/bin/python"
+export GSASII_DIR="/path/to/GSAS-II"
+export GSASII_PYTHON="/path/to/gsas-python"
 export GSASII_REFINEMENT_ARCHIVE="$HOME/GSAS-II_refinement_results"
 export GSASII_REFINEMENT_STAGING="$HOME/GSAS-II_refinement_staging"
 ```
