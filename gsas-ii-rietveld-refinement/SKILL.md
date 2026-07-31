@@ -1,11 +1,22 @@
 ---
 name: gsas-ii-rietveld-refinement
-description: Run careful single-pattern or sequential GSAS-II Rietveld refinement and archive final powder XRD results without generating figures. Use for GSAS-II/GSAS/EXPGUI powder refinement, Rietveld refinement, XRD refinement, CIF-based refinement, operando/in-situ/in situ XRD, temperature/time/voltage series, sequential refinement, multiphase refinement, reducing Rwp without distortion, comparing refined cells, organizing final CIF/XRD/GPX/LST/reports, or cleaning intermediate files. Do not use for plotting or restyling Rietveld figures; use the separate `rietveld-plotting` skill.
+description: Actively classify a powder-XRD request, then run careful single-pattern, independent-batch, or manifest-driven sequential GSAS-II Rietveld refinement and archive final results without generating figures. Use for GSAS-II/GSAS/EXPGUI powder refinement, Rietveld refinement, XRD refinement, CIF-based refinement, ambiguous multiple-pattern inputs, detector images that may require 1D integration, operando/in-situ/in situ XRD, temperature/time/voltage series, sequential refinement, multiphase refinement, reducing Rwp without distortion, comparing refined cells, organizing final CIF/XRD/GPX/LST/reports, or cleaning intermediate files. Do not use for plotting or restyling Rietveld figures; use a separate plotting skill.
 ---
 
 # GSAS-II Rietveld Refinement
 
-Use this skill to refine either one powder XRD pattern or an ordered series of already integrated one-dimensional patterns with a local GSAS-II installation. Archive only defensible results. Treat Rwp as one diagnostic, not the objective. Use the bundled deterministic drivers rather than writing a sample-specific script.
+Use this skill to classify and then refine either one powder XRD pattern or an ordered series of already integrated one-dimensional patterns with a local GSAS-II installation. Archive only defensible results. Treat Rwp as one diagnostic, not the objective. Use the bundled classifier and deterministic drivers rather than writing a sample-specific script.
+
+## Mandatory first gate: classify the request
+
+Before importing GSAS-II, creating a GPX, selecting refinement parameters, or creating a staging directory:
+
+1. State the proposed category: single pattern, sequential series, independent batch, detector integration required, plotting handoff, or ambiguous.
+2. Run `scripts/classify_refinement_request.py` with the supplied pattern, manifest, detector image, or accepted GPX inputs.
+3. Continue only when its JSON has `status=ready` and names the intended numerical driver.
+4. Stop numerical refinement for `status=blocked`, `status=needs_clarification`, or `status=handoff`.
+
+Do not infer sequential refinement from multiple filenames alone. Multiple patterns without a valid manifest are ambiguous until the user declares an ordered sequence or independent samples. Read `references/refinement-routing.md` for the exact decision table and edge cases.
 
 ## Defaults
 
@@ -24,6 +35,7 @@ Use this skill to refine either one powder XRD pattern or an ordered series of a
 
 Read these as needed:
 
+- `references/refinement-routing.md` at the start of every request.
 - `references/workflow.md` for the deterministic branched GSAS-II procedure and portable invocation.
 - `references/sequential-workflow.md` for operando/in-situ and other ordered-series refinement.
 - `references/sequential-manifest.md` for the required CSV schema and phase-set rules.
@@ -32,6 +44,8 @@ Read these as needed:
 
 Use:
 
+- `scripts/classify_refinement_request.py` as the mandatory read-only first gate.
+- `scripts/refinement_core.py` for shared routing, manifest preflight, path validation, and category enforcement.
 - `scripts/run_staged_refinement.py` to create the GPX candidates and `candidate_summary.json`.
 - `scripts/run_sequential_refinement.py` to stage inputs, refine anchor frames, run forward/reverse staged sequences, and create the sequence run summary.
 - `scripts/sequential_audit.py` to extract covariance-backed per-frame results, compare directions, and generate the validated sequence report.
@@ -39,15 +53,18 @@ Use:
 - `scripts/build_validate_refinement_report.py` to generate or validate the report, metric labels, and crystallographic uncertainties.
 - `scripts/archive_refinement_results.py` to transactionally create the final archive and safely remove staging files.
 
-## Route the request
+## Category actions
 
-- One diffraction pattern: use the single-pattern workflow below.
-- Two or more ordered patterns with time, temperature, voltage, current, capacity, state of charge, or another experimental coordinate: read both sequential references and use the sequential workflow.
-- A request only to draw or restyle an existing accepted `.gpx`: route to `rietveld-plotting`.
+- `single_pattern_refinement`: use the single-pattern workflow below.
+- `sequential_refinement`: read both sequential references and use the sequential workflow.
+- `independent_batch_refinement`: execute isolated single-pattern workflows with separate sample IDs, staging directories, reports, and archives. Never propagate parameters between samples.
+- `detector_integration_required`: do not call GSAS-II refinement. Request calibrated one-dimensional integration and provenance.
+- `plotting_handoff`: do not refine. Route an accepted GPX to `rietveld-plotting`; route heatmaps, waterfalls, and trajectory plots to an appropriate separate visualization workflow.
+- `multiple_patterns_ambiguous`, `existing_project_ambiguous`, or any conflict: ask the minimum blocking question and stop.
 
 ## Single-pattern workflow
 
-1. Inspect inputs: XRD format/range/step, CIF space group/cell/occupancy, instrument parameter file, and user sample context.
+1. Require a recorded `single_pattern_refinement` classification, then inspect XRD format/range/step, CIF space group/cell/occupancy, instrument parameter file, and user sample context.
 2. Create a new run staging directory. Never work directly in the final archive.
 3. Run `run_staged_refinement.py --plan-only` and record whether the instrument U/V/W profile is calibrated or uncalibrated.
 4. Run the deterministic driver. It must lock the instrument profile first, refine scale/background, then branch from the same baseline into cell-only, Zero-only, simultaneous cell+Zero, cell-then-Zero, and Zero-then-cell sensitivity cases.
@@ -62,7 +79,7 @@ Use:
 
 ## Sequential workflow
 
-1. Validate the manifest and every source hash. Reject duplicate frame IDs/orders, missing files, missing phase names, or file-order-only series unless the user deliberately enables that test mode.
+1. Require a recorded `sequential_refinement` classification, then validate the manifest and every source hash. Reject duplicate frame IDs/orders, missing files, missing phase names, or file-order-only series unless the user deliberately enables that test mode.
 2. Run `run_sequential_refinement.py --plan-only`. Declare whether the instrument profile is calibrated. Production sequences keep the instrument profile locked.
 3. Refine start, middle, end, and requested transition-region anchors. The start and end anchors must pass convergence, SVD, shift/esd, and Rwp/Rwp-min gates before propagation.
 4. Keep each phase's global cell fixed in the sequence. Represent frame-dependent cell changes with HAP `Dij/HStrain`; do not vary global `Cell` in a sequential refinement.
@@ -91,6 +108,7 @@ Stop or ask the user before claiming a final structural conclusion when:
 
 Every final report must include:
 
+- The mandatory request classification, its input evidence, and the selected driver.
 - Input paths and whether refinement used real GSAS-II.
 - Space group, CIF/source model, instrument parameters, 2theta range, and staged parameter order.
 - Final Rwp, Rp, R-bkg, wR-bkg, RF, RF², and GOF when available. Never use ambiguous `Rb` or `wRb` labels.

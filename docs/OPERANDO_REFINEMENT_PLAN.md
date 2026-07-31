@@ -47,6 +47,7 @@ unknown-phase identification, or figure generation in version 1.
 gsas-ii-rietveld-refinement/
 ├── SKILL.md
 ├── scripts/
+│   ├── classify_refinement_request.py
 │   ├── refinement_core.py
 │   ├── run_staged_refinement.py
 │   ├── run_sequential_refinement.py
@@ -66,6 +67,12 @@ current_mA,capacity_mAh,state_of_charge,phase_set
 
 Allow blank metadata fields, but never infer missing experimental metadata
 silently.
+
+Before this workflow starts, the shared classifier must distinguish a valid
+manifest-driven sequence from a single pattern, an explicitly independent
+batch, detector images requiring integration, a plotting request, or ambiguous
+multiple-pattern input. No GSAS-II project is created until the classification
+is `ready`.
 
 ## Deterministic workflow
 

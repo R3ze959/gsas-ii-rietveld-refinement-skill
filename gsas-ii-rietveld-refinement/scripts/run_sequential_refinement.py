@@ -12,6 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from refinement_core import (
+    CORE_MANIFEST_FIELDS,
+    STANDARD_METADATA_FIELDS,
+    classify_refinement_request,
+    clean_name,
+    require_file,
+    require_ready_route,
+)
 from refinement_audit import (
     _covariance_correlations,
     default_data_root,
@@ -26,35 +34,6 @@ from sequential_audit import CELL_LABELS, materialize_audit
 DEFAULT_STAGING_ROOT = default_data_root(
     "GSASII_REFINEMENT_STAGING", "GSAS-II_refinement_staging"
 )
-CORE_MANIFEST_FIELDS = {"frame_id", "pattern_path", "order", "phase_set"}
-STANDARD_METADATA_FIELDS = (
-    "time_s",
-    "temperature_K",
-    "voltage_V",
-    "current_mA",
-    "capacity_mAh",
-    "state_of_charge",
-)
-
-
-def clean_name(value: str) -> str:
-    output = []
-    for character in value.strip():
-        if character.isalnum() or character in "-_.":
-            output.append(character)
-        elif character in " /\\:;,+()[]{}":
-            output.append("_")
-    cleaned = "".join(output).strip("._-")
-    while "__" in cleaned:
-        cleaned = cleaned.replace("__", "_")
-    return cleaned or "unnamed"
-
-
-def require_file(value: str | Path, label: str) -> Path:
-    path = Path(value).expanduser().resolve()
-    if not path.is_file() or path.stat().st_size <= 0:
-        raise SystemExit(f"{label} is missing or empty: {path}")
-    return path
 
 
 def copy_verified(source: Path, destination: Path) -> dict[str, Any]:
@@ -988,6 +967,17 @@ def main() -> int:
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
 
+    request_classification = classify_refinement_request(
+        manifest=args.manifest,
+        intent="refine",
+        declared_mode="sequential",
+        allow_file_order_only=args.allow_missing_metadata,
+    )
+    require_ready_route(
+        request_classification,
+        "sequential_refinement",
+    )
+
     if not 2 <= args.background_order <= 20:
         raise SystemExit("--background-order must be between 2 and 20")
     if not 1 <= args.anchor_max_passes <= 20:
@@ -1054,6 +1044,7 @@ def main() -> int:
     plan = {
         "schema_version": 1,
         "sample_id": args.sample_id,
+        "request_classification": request_classification,
         "manifest": {
             "path": str(manifest_path),
             "bytes": manifest_path.stat().st_size,

@@ -1,4 +1,4 @@
 interface:
   display_name: "GSAS-II Rietveld Refinement"
-  short_description: "Single and sequential GSAS-II refinement; no plots"
-  default_prompt: "Use $gsas-ii-rietveld-refinement to run a staged single-pattern or operando sequential GSAS-II refinement, audit it, and preserve the non-plotting result."
+  short_description: "Classify and audit single or sequential GSAS-II XRD"
+  default_prompt: "Use $gsas-ii-rietveld-refinement to classify my XRD request first, then run only the matching staged GSAS-II refinement and audit workflow."

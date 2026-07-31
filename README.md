@@ -20,6 +20,31 @@ or saves a GPX.
 
 精修 skill 不生成图片；画图 skill 只读最终 GPX，不运行精修、不修改 GPX。
 
+## Mandatory request classification / 强制任务分类
+
+The first refinement action is now a deterministic routing gate, before
+GSAS-II is imported or a GPX is created:
+
+| Input/request | Route |
+|---|---|
+| One integrated 1D pattern | Deterministic single-pattern refinement |
+| Ordered 1D series plus a valid manifest | Forward/reverse sequential refinement |
+| Multiple independent patterns explicitly declared as a batch | Isolated single-pattern runs |
+| Multiple patterns without a manifest or batch declaration | Stop and clarify |
+| 2D detector frames | Stop and request calibrated 1D integration |
+| Figure, heatmap, waterfall, or trajectory request | Separate plotting workflow |
+
+The read-only classifier is
+`gsas-ii-rietveld-refinement/scripts/classify_refinement_request.py`.
+Shared routing and manifest preflight live in `refinement_core.py`. Both
+numerical drivers repeat the gate and preserve `request_classification` in
+their machine-readable plans.
+
+现在第一步不是直接调用 GSAS-II，而是主动判定任务类别。多个谱图不会仅凭
+文件名被自动当作原位序列；没有 manifest 时，必须先确认它们是独立样品还是
+连续帧。二维探测器图像必须先完成有标定依据的一维积分，纯绘图任务则退出
+精修 skill。
+
 ## Refinement features / 精修功能
 
 - Calls real GSAS-II through `GSASIIscriptable`; simulated curves are not

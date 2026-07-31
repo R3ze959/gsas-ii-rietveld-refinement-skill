@@ -1,5 +1,8 @@
 # Sequential GSAS-II workflow
 
+Enter this workflow only after the mandatory classifier returns
+`sequential_refinement` with `status=ready`.
+
 This mode covers operando, in-situ, temperature-series, time-series, and other
 ordered sets of already integrated one-dimensional powder patterns. It does
 not integrate detector images or generate figures.
