@@ -1,4 +1,4 @@
 interface:
   display_name: "Rietveld Plotting"
-  short_description: "Plot publication-ready Rietveld figures from GPX"
-  default_prompt: "Use $rietveld-plotting to create a publication-ready Rietveld plot from a final GSAS-II GPX file."
+  short_description: "Plot accepted Rietveld and operando XRD results"
+  default_prompt: "Use $rietveld-plotting to create publication-ready figures from an accepted GSAS-II GPX or audited temperature/operando sequential result without changing refinement parameters or inventing time/voltage synchronization."

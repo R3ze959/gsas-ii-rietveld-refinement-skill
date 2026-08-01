@@ -11,6 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from refinement_core import (
+    classify_refinement_request,
+    clean_name,
+    require_file,
+    require_ready_route,
+)
 from refinement_audit import (
     candidate_safety_errors,
     collect_candidate,
@@ -24,26 +30,6 @@ from refinement_audit import (
 DEFAULT_STAGING_ROOT = default_data_root(
     "GSASII_REFINEMENT_STAGING", "GSAS-II_refinement_staging"
 )
-
-
-def clean_name(value: str) -> str:
-    output = []
-    for character in value.strip():
-        if character.isalnum() or character in "-_.":
-            output.append(character)
-        elif character in " /\\:;,+()[]{}":
-            output.append("_")
-    cleaned = "".join(output).strip("._-")
-    while "__" in cleaned:
-        cleaned = cleaned.replace("__", "_")
-    return cleaned or "unnamed"
-
-
-def require_file(value: str, label: str) -> Path:
-    path = Path(value).expanduser().resolve()
-    if not path.is_file() or path.stat().st_size <= 0:
-        raise SystemExit(f"{label} is missing or empty: {path}")
-    return path
 
 
 def configure_flags(
@@ -241,6 +227,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    request_classification = classify_refinement_request(
+        patterns=[args.xrd],
+        intent="refine",
+        declared_mode="single",
+    )
+    require_ready_route(
+        request_classification,
+        "single_pattern_refinement",
+    )
+
     if not 2 <= args.background_order <= 20:
         raise SystemExit("--background-order must be between 2 and 20")
     if not 1 <= args.max_refinement_passes <= 20:
@@ -283,6 +279,7 @@ def main() -> int:
     plan_payload = {
         "schema_version": 1,
         "sample_id": args.sample_id,
+        "request_classification": request_classification,
         "inputs": source_inputs,
         "settings": {
             "background_order": args.background_order,

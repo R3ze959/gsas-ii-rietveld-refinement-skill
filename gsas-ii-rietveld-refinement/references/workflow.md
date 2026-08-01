@@ -1,5 +1,10 @@
 # GSAS-II workflow reference
 
+Enter this workflow only after the mandatory classifier returns
+`single_pattern_refinement` with `status=ready`. Multiple independent patterns
+must use isolated runs; a manifest-driven series belongs to
+`sequential-workflow.md`.
+
 ## Local GSAS-II invocation
 
 Run bundled scripts with:
