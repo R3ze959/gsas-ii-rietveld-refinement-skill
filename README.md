@@ -6,12 +6,43 @@ read-only publication plotting.
 一个面向真实 GSAS-II 粉末精修的 Codex skill 仓库。精修与画图严格分离，
 并新增了原位、operando、温度和时间序列的顺序精修模式。
 
+## Current release / 当前版本
+
+The current release is **v2.2.0**. It adds manifest-driven operando and
+temperature-series refinement, audited metadata synchronization, and separate
+series plotting while preserving the deterministic single-pattern workflow.
+See [v2.2.0 release notes](RELEASE_NOTES_v2.2.0.md).
+
+当前发布版为 **v2.2.0**：新增基于 manifest 的原位/温度顺序精修、带审计
+的实验元数据同步，以及独立的序列画图；原有确定性单谱精修流程保持不变。
+详见 [v2.2.0 更新说明](RELEASE_NOTES_v2.2.0.md)。
+
+## Changelog / 更新日志
+
+### v2.2.0 — 2026-08-01
+
+- Added mandatory classification for single-pattern, independent-batch,
+  sequential/operando, detector-integration, and plotting requests.
+- Added audited temperature, time, voltage, capacity, and state-of-charge
+  sequential refinement with anchor checkpoints and forward/reverse checks.
+- Added one-to-one metadata synchronization, STOE frame conversion, sequential
+  candidate selection, and machine-readable `pass`/`review`/`fail` auditing.
+- Added separate read-only temperature/operando stack, contour, and trajectory
+  plotting without merging visualization into refinement.
+- Changed new-release licensing from MIT to PolyForm Noncommercial 1.0.0;
+  commercial use now requires separate written authorization.
+
+本版新增单谱、独立批次、原位顺序、探测器积分和绘图任务的强制分类；
+新增温度、时间、电压、容量和 SOC 序列的锚点检查、正反向精修、一对一元数据
+同步与机器审计；同时保持精修与绘图分离。新版自有代码改用 PolyForm
+Noncommercial 1.0.0，商业使用需另行取得书面授权。
+
 ## Repository layout / 仓库结构
 
 ```text
 gsas-ii-rietveld-refinement/  # single-pattern and sequential refinement
-rietveld-plotting/            # read-only plotting from an accepted GPX
-docs/                         # design and validation notes
+rietveld-plotting/            # read-only single-pattern and series plotting
+docs/                         # public validation record
 tests/                        # repository-owned unit tests
 ```
 
@@ -58,7 +89,9 @@ their machine-readable plans.
   correlations, SVD warnings, and candidate path dependence.
 - Writes `candidate_summary.json`, validates the canonical report, and uses
   transactional archive replacement for single-pattern results.
-- Supports multiphase models and constrained phase fractions.
+- Accepts explicitly declared phase sets in sequential runs. Quantitative phase
+  fractions remain `review` unless constraints and formal uncertainties pass
+  the audit; this release does not claim general-purpose multiphase automation.
 
 - 通过 `GSASIIscriptable` 真实调用 GSAS-II，不把模拟曲线当作精修。
 - 单谱精修采用确定性分阶段和分支比较，而不是按顺序盲目释放晶胞、Zero、
@@ -68,29 +101,33 @@ their machine-readable plans.
 - 自动核验残差峰、不确定度、R 因子命名、参数相关性和候选路径依赖。
 - 单谱结果保留 `candidate_summary.json`，报告经过机器校验，归档采用
   “验证输入 → 临时目录 → 哈希复核 → 原子替换”。
-- 支持多相模型和受约束相分数。
+- 顺序精修可以读取显式声明的相集合；只有约束和正式不确定度均通过审计时，
+  才能将相分数作为定量结果。本版本不宣称通用自动多相精修。
 
 ## Operando and sequential mode / 原位与顺序精修
 
 The sequential driver accepts ordered, already integrated one-dimensional
 patterns with a CSV manifest. It:
 
-1. validates frame IDs, order, metadata, files, and SHA-256 hashes;
-2. refines representative start/middle/end/transition anchors;
-3. blocks propagation when an endpoint anchor fails convergence, SVD,
-   shift/esd, or Rwp/Rwp-min gates;
-4. keeps the instrument profile locked and uses HAP `Dij/HStrain` rather than
-   global cell refinement for frame-dependent lattice changes;
-5. runs fixed stages: stable background/scale/Dij, optional sample geometry,
-   constrained phase fractions plus size/microstrain, then optional atomic
-   X/U terms;
-6. runs forward from the first anchor and reverse from the last anchor;
-7. exports covariance-backed per-frame cells, uncertainties, phase fractions,
-   convergence, correlations, residual audits, JSON, and CSV;
-8. distinguishes `pass`, `review`, and `fail` instead of treating every
-   numerical completion as success;
-9. stages verified copies of the manifest, instrument file, CIFs, and patterns;
-10. produces no figure.
+1. preflights 1D patterns and validates frame IDs, order, metadata provenance,
+   files, and SHA-256 hashes;
+2. can join a frame index to experimental metadata by exact key or bounded
+   one-to-one nearest time, without interpolation;
+3. refines start/middle/end/requested/phase-boundary anchors and uses accepted
+   internal anchors as actual checkpoints;
+4. partitions forward and reverse runs into checkpoint segments so a failed
+   segment is retained without erasing independent results;
+5. keeps one common global reference cell and converts each checkpoint cell to
+   the equivalent HAP `Dij/HStrain` seed;
+6. runs bounded repeated stages: stable background/scale/Dij, optional sample
+   geometry, constrained phase fractions plus justified size/microstrain, then
+   explicitly gated atomic X/U terms;
+7. exports per-frame cells, formal uncertainties when available, phase
+   fractions, convergence, correlations, residual audits, JSON, and CSV;
+8. compares forward/reverse sensitivity and persistent residual peaks;
+9. writes a conservative multi-candidate `candidate_summary.json` that rejects
+   any `fail` result and ranks stability before median Rwp;
+10. stages verified inputs and produces no figure.
 
 顺序精修面向已经积分好的一维原位/operando/温度/时间序列。它会严格读取
 CSV 清单，先精修首帧、中间帧、末帧和转变区锚点，再从首末锚点分别运行
@@ -116,22 +153,24 @@ kept outside version control and used only for local validation.
 
 官方训练数据不会提交进本仓库，只作为本地外部验证数据。
 
-The exact test configuration, numeric reproducibility result, audit status, and
-remaining scientific limitations are recorded in
-[Operando validation](docs/OPERANDO_VALIDATION.md). The official exercise
-completed twice with identical exported numeric results, but the audit remains
-`review` because high correlations, large final shift/esd values, and
-forward/reverse path dependence must not be hidden.
+The exact test configuration, bounded stage-convergence improvement, audit
+status, and remaining scientific limitations are recorded in
+[Operando validation](docs/OPERANDO_VALIDATION.md). All 17 official exercise
+frames completed in both directions and path sensitivity decreased, but a
+persistent missing peak near 9.3 degrees triggers the hard residual gate.
+The current phase model therefore remains `fail`, not an accepted result.
 
-完整验证配置、两次运行的数值一致性、审计结果和适用边界见
-[原位顺序精修验证记录](docs/OPERANDO_VALIDATION.md)。官方序列两次运行的
-导出数值完全一致，但由于高相关、较大的最终 shift/esd 和正反向路径依赖，
-审计结果仍是 `review`，不能表述为模型已无歧义。
+完整验证配置、分阶段收敛改进、审计结果和适用边界见
+[原位顺序精修验证记录](docs/OPERANDO_VALIDATION.md)。当前官方序列 17 帧
+均完整结束，双向路径差已明显降低；但约 9.3° 的持续漏峰触发模型硬门槛，
+因此审计仍为 `fail`。软件完成不等于当前相模型已达到科学可接受状态。
 
 ## Local configuration / 本地配置
 
-Install GSAS-II separately, then point the skills to a Python interpreter that
-can import it:
+Use Python 3.10 or newer with NumPy and Matplotlib available for the plotting
+and audit utilities. Install GSAS-II separately, then point the refinement and
+single-pattern plotting routes to a compatible Python interpreter that can
+import it:
 
 ```bash
 export GSASII_DIR="/path/to/GSAS-II"
@@ -145,21 +184,57 @@ Bring your own calibrated instrument file, CIF models, and diffraction data.
 The repository contains no private experimental data, instrument files, or
 personal absolute paths.
 
-使用时需自行准备 GSAS-II、校准仪器文件、CIF 和衍射数据。本仓库不包含
-私人原始数据、私人仪器参数或个人电脑绝对路径。
+画图和审计脚本需要 Python 3.10 或以上版本、NumPy 与 Matplotlib；精修及
+单谱 GPX 画图还需要单独安装 GSAS-II。使用时需自行准备校准仪器文件、CIF
+和衍射数据。本仓库不包含私人原始数据、私人仪器参数或个人电脑绝对路径。
 
 ## Plotting split / 画图拆分
 
 `rietveld-plotting` reads an accepted final GPX and creates the locked
-publication-style figure without modifying refinement parameters. This split
-prevents display choices from contaminating model selection or numerical
-audits.
+publication-style single-pattern figure without modifying refinement
+parameters. It now also reads an audited temperature or operando sequential
+result and generates three complementary figures: a series-coloured stacked
+pattern, an intensity contour map, and refined cell-parameter trajectories
+with formal GSAS-II uncertainties. Constant-temperature battery operando
+results use an audited time/voltage/capacity coordinate when available, or
+honest frame order when synchronization is absent. The sequential route
+verifies all recorded pattern and GPX hashes before and after plotting,
+exports 600 dpi PNG plus editable SVG, and retains a machine-readable plot
+manifest.
 
-`rietveld-plotting` 只负责从已接受的最终 GPX 生成论文风格图片。显示方式
-不会反向影响精修参数、候选选择或审计结果。
+The temperature-series layout follows the typography hierarchy, boxed axes,
+outward ticks, restrained colours, and export quality of the repository's
+Origin-style contract. Its scientific layout follows published
+variable-temperature and operando-XRD conventions, but no paper PDF or paper
+data is redistributed. Raw patterns and refined trajectories are never
+smoothed; contour resampling, global/per-frame normalization, and colour-limit
+clipping are display-only operations recorded in the manifest.
+
+`rietveld-plotting` 只负责从已接受的最终 GPX 或已审计的温度/原位顺序
+精修结果生成论文风格图片。新增输出包含顺序堆叠谱、强度等高图和带
+正式不确定度的晶胞参数轨迹。恒温电池原位在有同步证据时使用时间、电压或容量；
+缺少同步信息时只使用真实帧序，不将帧号伪装为时间或电压。它在作图前后核对所有源谱和 GPX 哈希，
+不平滑原始谱图或精修轨迹，并用 JSON 记录所有仅用于显示的归一化、插值
+和色阶裁剪。显示方式不会反向影响精修参数、候选选择或审计结果。
 
 ## License / 许可证
 
-Released under the MIT License. See [LICENSE](LICENSE).
+Original code in this repository is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use is permitted
+under its exact terms. Commercial use requires a separate written license from
+[R3ze959](https://github.com/R3ze959); contact the repository owner before use.
+Because commercial use is restricted, this is a source-available release, not
+an OSI-approved open-source release. Earlier versions already released under
+the MIT License remain available under their original terms.
 
-本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。
+本仓库的自有代码采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。
+在该许可证的准确条款内可以非商业使用；商业使用必须事先向
+[R3ze959](https://github.com/R3ze959) 取得单独的书面授权。由于限制商业使用，
+本版本属于源代码可见软件（source-available），不属于 OSI 认可的开源软件。
+已经以 MIT 许可证发布的旧版本仍继续适用原 MIT 条款。
+
+This repository does not bundle or relicense GSAS-II. GSAS-II, third-party
+libraries, and third-party datasets remain governed by their own licenses.
+
+本仓库不捆绑、也不重新许可 GSAS-II。GSAS-II、第三方库和第三方数据集
+分别遵循它们自身的许可证。

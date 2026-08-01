@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import shutil
+import statistics
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +30,11 @@ from refinement_audit import (
     sha256,
     write_json_atomic,
 )
-from sequential_audit import CELL_LABELS, materialize_audit
+from sequential_audit import (
+    CELL_LABELS,
+    _last_cycle_shift_over_su,
+    materialize_segmented_audit,
+)
 
 
 DEFAULT_STAGING_ROOT = default_data_root(
@@ -173,6 +179,176 @@ def load_manifest(
                 "file-order-only test."
             )
     return frames
+
+
+def inspect_text_pattern(path: Path) -> dict[str, Any]:
+    """Inspect an integrated text pattern without changing intensities."""
+    two_theta: list[float] = []
+    column_counts: list[int] = []
+    with path.open("r", encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "!", ";")):
+                continue
+            tokens = stripped.replace(",", " ").split()
+            if len(tokens) < 2:
+                continue
+            try:
+                values = [float(token) for token in tokens[:3]]
+            except ValueError:
+                continue
+            if not all(math.isfinite(value) for value in values):
+                continue
+            two_theta.append(values[0])
+            column_counts.append(len(tokens))
+    if len(two_theta) < 20:
+        raise ValueError(
+            f"Pattern has fewer than 20 parseable points: {path}"
+        )
+    steps = [
+        two_theta[index] - two_theta[index - 1]
+        for index in range(1, len(two_theta))
+    ]
+    if any(step <= 0 for step in steps):
+        raise ValueError(f"Pattern 2theta values are not strictly increasing: {path}")
+    median_step = statistics.median(steps)
+    maximum_step_deviation = max(abs(step - median_step) for step in steps)
+    return {
+        "path": str(path),
+        "point_count": len(two_theta),
+        "two_theta_min": two_theta[0],
+        "two_theta_max": two_theta[-1],
+        "median_step": median_step,
+        "maximum_relative_step_deviation": (
+            maximum_step_deviation / median_step if median_step > 0 else None
+        ),
+        "minimum_column_count": min(column_counts),
+        "maximum_column_count": max(column_counts),
+        "contains_explicit_third_column": min(column_counts) >= 3,
+    }
+
+
+def preflight_patterns(
+    frames: list[dict[str, Any]],
+    *,
+    mode: str,
+    maximum_step_relative_delta: float = 0.02,
+) -> dict[str, Any]:
+    """Check point counts, ranges and step sizes before importing GSAS-II."""
+    if mode == "off":
+        return {"mode": mode, "status": "not_run", "patterns": [], "issues": []}
+    patterns = []
+    issues = []
+    for frame in frames:
+        try:
+            inspection = inspect_text_pattern(Path(frame["pattern"]["path"]))
+            inspection["frame_id"] = frame["frame_id"]
+            inspection["order"] = frame["order"]
+            patterns.append(inspection)
+        except Exception as exc:
+            issues.append(
+                {
+                    "frame_id": frame["frame_id"],
+                    "order": frame["order"],
+                    "reason": str(exc),
+                }
+            )
+    if patterns:
+        reference = patterns[0]
+        for item in patterns[1:]:
+            step_delta = abs(item["median_step"] - reference["median_step"]) / max(
+                abs(reference["median_step"]), 1e-15
+            )
+            endpoint_tolerance = 2 * max(
+                item["median_step"], reference["median_step"]
+            )
+            if step_delta > maximum_step_relative_delta:
+                issues.append(
+                    {
+                        "frame_id": item["frame_id"],
+                        "order": item["order"],
+                        "reason": (
+                            "median 2theta step differs from the first frame by "
+                            f"{step_delta:.3%}"
+                        ),
+                    }
+                )
+            if (
+                abs(item["two_theta_min"] - reference["two_theta_min"])
+                > endpoint_tolerance
+                or abs(item["two_theta_max"] - reference["two_theta_max"])
+                > endpoint_tolerance
+            ):
+                issues.append(
+                    {
+                        "frame_id": item["frame_id"],
+                        "order": item["order"],
+                        "reason": "2theta range differs by more than two data steps",
+                    }
+                )
+    status = "pass" if not issues else ("fail" if mode == "strict" else "review")
+    result = {
+        "mode": mode,
+        "status": status,
+        "maximum_step_relative_delta": maximum_step_relative_delta,
+        "patterns": patterns,
+        "issues": issues,
+    }
+    if status == "fail":
+        raise SystemExit(
+            "Pattern preflight failed: " + json.dumps(issues, ensure_ascii=False)
+        )
+    return result
+
+
+def audit_manifest_metadata(
+    frames: list[dict[str, Any]], *, file_order_only: bool
+) -> dict[str, Any]:
+    """Record whether experimental coordinates are complete and ordered."""
+    fields: dict[str, Any] = {}
+    varying = []
+    for key in sorted(STANDARD_METADATA_FIELDS):
+        values = [frame["metadata"].get(key) for frame in frames]
+        finite = [
+            float(value)
+            for value in values
+            if value is not None and math.isfinite(float(value))
+        ]
+        if not finite:
+            continue
+        differences = [
+            finite[index] - finite[index - 1]
+            for index in range(1, len(finite))
+        ]
+        if len(set(finite)) > 1:
+            varying.append(key)
+        fields[key] = {
+            "present_count": len(finite),
+            "missing_count": len(frames) - len(finite),
+            "varies": len(set(finite)) > 1,
+            "monotonic_non_decreasing": all(value >= 0 for value in differences),
+            "monotonic_non_increasing": all(value <= 0 for value in differences),
+        }
+    complete_time = (
+        "time_s" in fields
+        and fields["time_s"]["missing_count"] == 0
+        and fields["time_s"]["monotonic_non_decreasing"]
+    )
+    if complete_time:
+        mode = "time_synchronized"
+    elif varying:
+        mode = "ordered_experimental_coordinates"
+    else:
+        mode = "file_order_only"
+    return {
+        "mode": mode,
+        "file_order_only_explicitly_allowed": bool(file_order_only),
+        "varying_fields": varying,
+        "fields": fields,
+        "scientific_status": (
+            "exploratory" if mode == "file_order_only" else "ready"
+        ),
+    }
 
 
 def parse_hstrain_masks(values: list[str], phase_count: int) -> list[str]:
@@ -562,6 +738,9 @@ def build_anchor(
     max_shift_over_su: float,
     max_rwp_over_rmin: float,
     refine_phase_fractions: bool,
+    size_models: list[str],
+    mustrain_models: list[str],
+    mustrain_axes: list[tuple[int, int, int]],
 ) -> dict[str, Any]:
     project = G2sc.G2Project(newgpx=str(output_path))
     histogram_kwargs = {"fmthint": xrd_format} if xrd_format else {}
@@ -633,15 +812,102 @@ def build_anchor(
             max_rwp_over_rmin=max_rwp_over_rmin,
         )
     project.save(str(output_path))
-    return collect_anchor(project, frame, passes)
+    stable_result = collect_anchor(project, frame, passes)
+    stable_path = output_path.with_name(
+        f".{output_path.stem}.stable{output_path.suffix}"
+    )
+    stable_lst = stable_path.with_suffix(".lst")
+    shutil.copy2(output_path, stable_path)
+    if output_path.with_suffix(".lst").is_file():
+        shutil.copy2(output_path.with_suffix(".lst"), stable_lst)
+    profile_attempt = None
+    profile_attempt_exception = None
+    if any(model != "off" for model in size_models + mustrain_models):
+        try:
+            for index, phase in enumerate(project.phases()):
+                configure_broadening(
+                    phase,
+                    [histogram],
+                    size_model=size_models[index],
+                    mustrain_model=mustrain_models[index],
+                    mustrain_axis=mustrain_axes[index],
+                )
+            passes += run_refinement_passes(
+                project,
+                maximum_passes=maximum_passes,
+                max_shift_over_su=max_shift_over_su,
+                max_rwp_over_rmin=max_rwp_over_rmin,
+            )
+            profile_attempt = collect_anchor(project, frame, passes)
+        except Exception as exc:
+            profile_attempt_exception = f"{type(exc).__name__}: {exc}"
+        if (
+            profile_attempt is None
+            or not anchor_gate_passes(
+                profile_attempt,
+                max_shift_over_su=max_shift_over_su,
+                max_rwp_over_rmin=max_rwp_over_rmin,
+            )
+        ):
+            shutil.copy2(stable_path, output_path)
+            if stable_lst.is_file():
+                shutil.copy2(stable_lst, output_path.with_suffix(".lst"))
+            project = G2sc.G2Project(str(output_path))
+            passes = stable_result["refinement_passes"]
+    project.save(str(output_path))
+    result = collect_anchor(project, frame, passes)
+    result["profile_seed_attempt"] = {
+        "requested": any(
+            model != "off" for model in size_models + mustrain_models
+        ),
+        "accepted": (
+            profile_attempt is not None
+            and anchor_gate_passes(
+                profile_attempt,
+                max_shift_over_su=max_shift_over_su,
+                max_rwp_over_rmin=max_rwp_over_rmin,
+            )
+        ),
+        "attempted_metrics": (
+            profile_attempt["metrics"] if profile_attempt else None
+        ),
+        "attempted_convergence": (
+            profile_attempt["convergence"] if profile_attempt else None
+        ),
+        "exception": profile_attempt_exception,
+        "fallback_to_stable_anchor": (
+            profile_attempt_exception is not None
+            or (
+                profile_attempt is not None
+                and not anchor_gate_passes(
+                    profile_attempt,
+                    max_shift_over_su=max_shift_over_su,
+                    max_rwp_over_rmin=max_rwp_over_rmin,
+                )
+            )
+        ),
+    }
+    stable_path.unlink(missing_ok=True)
+    stable_lst.unlink(missing_ok=True)
+    stable_lst.unlink(missing_ok=True)
+    return result
 
 
 def select_anchor_frames(
     frames: list[dict[str, Any]], requested_orders: str | None
 ) -> list[dict[str, Any]]:
     by_order = {frame["order"]: frame for frame in frames}
+    required_orders = {
+        frames[0]["order"],
+        frames[len(frames) // 2]["order"],
+        frames[-1]["order"],
+    }
+    for index in range(1, len(frames)):
+        if frames[index]["phase_set"] != frames[index - 1]["phase_set"]:
+            required_orders.add(frames[index - 1]["order"])
+            required_orders.add(frames[index]["order"])
     if requested_orders:
-        orders = [frames[0]["order"], frames[-1]["order"]]
+        orders = set(required_orders)
         for item in requested_orders.split(","):
             try:
                 order = int(item.strip())
@@ -651,11 +917,130 @@ def select_anchor_frames(
                 ) from exc
             if order not in by_order:
                 raise SystemExit(f"Anchor order is absent from manifest: {order}")
-            if order not in orders:
-                orders.append(order)
+            orders.add(order)
         return [by_order[order] for order in sorted(orders)]
-    indices = sorted({0, len(frames) // 2, len(frames) - 1})
-    return [frames[index] for index in indices]
+    return [by_order[order] for order in sorted(required_orders)]
+
+
+def anchor_gate_passes(
+    result: dict[str, Any],
+    *,
+    max_shift_over_su: float,
+    max_rwp_over_rmin: float,
+) -> bool:
+    convergence = result["convergence"]
+    shift = convergence.get("max_shift_over_su")
+    quality_ratio = result["metrics"].get("Rwp_over_Rwp_min")
+    return bool(
+        convergence.get("converged", False)
+        and not convergence.get("SVD0", 0)
+        and shift is not None
+        and float(shift) <= max_shift_over_su
+        and quality_ratio is not None
+        and float(quality_ratio) <= max_rwp_over_rmin
+    )
+
+
+def build_anchor_segments(
+    frames: list[dict[str, Any]],
+    accepted_anchor_ids: set[str],
+    *,
+    direction: str,
+) -> list[dict[str, Any]]:
+    """Partition every frame into checkpoint-seeded directional segments."""
+    if direction not in {"forward", "reverse"}:
+        raise ValueError(f"Unsupported segment direction: {direction}")
+    anchor_indices = [
+        index
+        for index, frame in enumerate(frames)
+        if frame["frame_id"] in accepted_anchor_ids
+    ]
+    if not anchor_indices or anchor_indices[0] != 0 or anchor_indices[-1] != len(frames) - 1:
+        raise ValueError("Accepted anchors must include the first and last frames")
+    segments = []
+    if direction == "forward":
+        for segment_index, start in enumerate(anchor_indices[:-1]):
+            stop = (
+                anchor_indices[segment_index + 1]
+                if segment_index + 2 < len(anchor_indices)
+                else len(frames)
+            )
+            segment_frames = frames[start:stop]
+            if not segment_frames:
+                continue
+            segments.append(
+                {
+                    "segment_id": f"forward_{segment_index:03d}",
+                    "checkpoint_frame_id": frames[start]["frame_id"],
+                    "frames": segment_frames,
+                }
+            )
+    else:
+        descending = list(reversed(anchor_indices))
+        for segment_index, high in enumerate(descending[:-1]):
+            low = (
+                descending[segment_index + 1]
+            )
+            lower_bound = (
+                low + 1 if segment_index + 2 < len(descending) else 0
+            )
+            segment_frames = list(reversed(frames[lower_bound : high + 1]))
+            if not segment_frames:
+                continue
+            segments.append(
+                {
+                    "segment_id": f"reverse_{segment_index:03d}",
+                    "checkpoint_frame_id": frames[high]["frame_id"],
+                    "frames": segment_frames,
+                }
+            )
+    covered = [frame["frame_id"] for segment in segments for frame in segment["frames"]]
+    expected = [frame["frame_id"] for frame in frames]
+    if sorted(covered) != sorted(expected) or len(covered) != len(set(covered)):
+        raise RuntimeError(
+            f"{direction} checkpoint segmentation did not cover each frame exactly once"
+        )
+    return segments
+
+
+def read_reference_cells(
+    G2sc: Any,
+    anchor_path: Path,
+    phase_names: list[str],
+) -> dict[str, list[Any]]:
+    """Read one common global cell for direction-comparable sequences."""
+    project = G2sc.G2Project(str(anchor_path))
+    by_name = {phase.name: phase for phase in project.phases()}
+    missing = sorted(set(phase_names) - set(by_name))
+    if missing:
+        raise ValueError(
+            "Reference anchor is missing phase(s): " + ", ".join(missing)
+        )
+    return {
+        name: list(by_name[name].data["General"]["Cell"])
+        for name in phase_names
+    }
+
+
+def hstrain_offsets_for_cells(
+    *,
+    reference_cell: list[Any],
+    target_cell: list[Any],
+    strain_names: list[str],
+    cell_to_reciprocal: Any,
+) -> list[float]:
+    """Convert a target anchor cell into HStrain offsets from one reference."""
+    labels = ("D11", "D22", "D33", "D12", "D13", "D23")
+    reference_a = cell_to_reciprocal(reference_cell[1:7])
+    target_a = cell_to_reciprocal(target_cell[1:7])
+    differences = {
+        label: float(target - reference)
+        for label, target, reference in zip(labels, target_a, reference_a)
+    }
+    return [
+        differences.get(name, 0.0)
+        for name in strain_names
+    ]
 
 
 def prepare_sequence_base(
@@ -675,7 +1060,11 @@ def prepare_sequence_base(
     refine_phase_fractions: bool,
     hstrain_masks: list[str],
     max_cycles: int,
-) -> tuple[Any, list[str]]:
+    reference_cells: dict[str, list[Any]],
+) -> tuple[Any, list[str], dict[str, Any]]:
+    from GSASII import GSASIIlattice as G2lat  # type: ignore
+    from GSASII import GSASIIspc as G2spc  # type: ignore
+
     shutil.copy2(seed_anchor_path, base_path)
     project = G2sc.G2Project(str(base_path))
     first_histogram = project.histograms()[0]
@@ -692,7 +1081,27 @@ def prepare_sequence_base(
         frame["histogram"] = histogram.name
 
     project.copyHistParms(0, "all", ["b", "i", "l"])
+    seed_hstrain_offsets = {}
     for phase in project.phases():
+        if phase.name not in reference_cells:
+            raise ValueError(
+                f"No common reference cell supplied for phase {phase.name}"
+            )
+        target_cell = list(phase.data["General"]["Cell"])
+        strain_names = list(
+            G2spc.HStrainNames(phase.data["General"]["SGData"])
+        )
+        seed_hstrain_offsets[phase.name] = {
+            "strain_names": strain_names,
+            "values": hstrain_offsets_for_cells(
+                reference_cell=reference_cells[phase.name],
+                target_cell=target_cell,
+                strain_names=strain_names,
+                cell_to_reciprocal=G2lat.cell2A,
+            ),
+            "target_anchor_cell": target_cell,
+        }
+        phase.data["General"]["Cell"] = list(reference_cells[phase.name])
         phase.copyHAPvalues(0, "all")
         phase.set_refinements({"Cell": False, "Atoms": {"all": ""}})
 
@@ -739,6 +1148,14 @@ def prepare_sequence_base(
                 ),
                 hstrain_mask=mask if use_phase else False,
             )
+            enabled = (
+                [mask] * expected if isinstance(mask, bool) else list(mask)
+            )
+            offsets = seed_hstrain_offsets[phase.name]["values"]
+            phase.data["Histograms"][histogram.name]["HStrain"][0] = [
+                float(value) if flag and use_phase else 0.0
+                for value, flag in zip(offsets, enabled)
+            ]
 
     if "Constraints" in project.data:
         project.data["Constraints"]["data"]["_seqmode"] = "auto-wildcard"
@@ -747,7 +1164,11 @@ def prepare_sequence_base(
     project.set_Controls("seqCopy", True)
     project.set_Controls("Reverse Seq", False)
     project.save(str(base_path))
-    return project, [histogram.name for histogram in project.histograms()]
+    return (
+        project,
+        [histogram.name for histogram in project.histograms()],
+        seed_hstrain_offsets,
+    )
 
 
 def run_sequence(
@@ -757,6 +1178,7 @@ def run_sequence(
     output_path: Path,
     reverse: bool,
     max_cycles: int,
+    stage_maximum_passes: int,
     phase_names: list[str],
     refine_displacement: bool,
     refine_phase_fractions: bool,
@@ -776,32 +1198,80 @@ def run_sequence(
     # is always the matching seed anchor.
     project.set_Controls("Reverse Seq", False)
     stages = []
+    halted_after_stage = None
 
-    def execute_stage(name: str, required_tokens: tuple[str, ...] = ()) -> None:
-        project.refine()
-        project.save(str(output_path))
-        sequence = project.seqref()
-        completed = sequence.histograms() if sequence is not None else []
-        stage_failures = []
-        if sequence is not None:
-            for histogram_name in completed:
-                data = sequence.data[histogram_name]
-                r_values = data.get("Rvals", {})
-                if not r_values.get("converged", False):
-                    stage_failures.append(
-                        f"{histogram_name}: not converged"
-                    )
-                if int(r_values.get("SVD0", 0) or 0):
-                    stage_failures.append(
-                        f"{histogram_name}: SVD0={r_values['SVD0']}"
-                    )
-                vary_list = [str(item) for item in data.get("varyList", [])]
-                for token in required_tokens:
-                    if not any(token in variable for variable in vary_list):
-                        stage_failures.append(
-                            f"{histogram_name}: required variable family "
-                            f"{token!r} is absent"
+    def execute_stage(
+        name: str, required_tokens: tuple[str, ...] = ()
+    ) -> bool:
+        exception_message = None
+        completed: list[str] = []
+        stage_failures: list[str] = []
+        pass_diagnostics = []
+        for pass_index in range(1, stage_maximum_passes + 1):
+            try:
+                project.refine()
+            except Exception as exc:
+                exception_message = f"{type(exc).__name__}: {exc}"
+            finally:
+                project.save(str(output_path))
+            sequence = project.seqref()
+            completed = sequence.histograms() if sequence is not None else []
+            current_failures = []
+            final_shifts = []
+            if exception_message:
+                current_failures.append(
+                    f"GSAS-II exception: {exception_message}"
+                )
+            if sequence is not None:
+                for histogram_name in completed:
+                    data = sequence.data[histogram_name]
+                    r_values = data.get("Rvals", {})
+                    if not r_values.get("converged", False):
+                        current_failures.append(
+                            f"{histogram_name}: not converged"
                         )
+                    if int(r_values.get("SVD0", 0) or 0):
+                        current_failures.append(
+                            f"{histogram_name}: SVD0={r_values['SVD0']}"
+                        )
+                    last_shift = _last_cycle_shift_over_su(data)
+                    if last_shift is not None:
+                        final_shifts.append(last_shift)
+                    vary_list = [
+                        str(item) for item in data.get("varyList", [])
+                    ]
+                    for token in required_tokens:
+                        if not any(
+                            token in variable for variable in vary_list
+                        ):
+                            current_failures.append(
+                                f"{histogram_name}: required variable family "
+                                f"{token!r} is absent"
+                            )
+            if set(expected) != set(completed):
+                current_failures.append(
+                    f"completed {len(completed)} of {len(expected)} histograms"
+                )
+            maximum_final_shift = (
+                max(final_shifts) if final_shifts else None
+            )
+            pass_diagnostics.append(
+                {
+                    "pass": pass_index,
+                    "completed_histograms": len(completed),
+                    "maximum_final_cycle_shift_over_su": maximum_final_shift,
+                    "failures": current_failures,
+                }
+            )
+            stage_failures = current_failures
+            if exception_message:
+                break
+            if (
+                not current_failures
+                and maximum_final_shift is not None
+                and maximum_final_shift <= 1.0
+            ):
+                break
         stage_path = output_path.with_name(
             f"{output_path.stem}_{name}{output_path.suffix}"
         )
@@ -814,36 +1284,48 @@ def run_sequence(
                 "completed_histograms": completed,
                 "complete": set(expected) == set(completed),
                 "failures": stage_failures,
+                "exception": exception_message,
+                "refinement_passes": len(pass_diagnostics),
+                "stability_target": {
+                    "maximum_final_cycle_shift_over_su": 1.0,
+                    "met": bool(
+                        pass_diagnostics
+                        and pass_diagnostics[-1][
+                            "maximum_final_cycle_shift_over_su"
+                        ]
+                        is not None
+                        and pass_diagnostics[-1][
+                            "maximum_final_cycle_shift_over_su"
+                        ]
+                        <= 1.0
+                    ),
+                },
+                "pass_diagnostics": pass_diagnostics,
             }
         )
-        if set(expected) != set(completed):
-            raise RuntimeError(
-                f"Sequential stage {name} completed {len(completed)} of "
-                f"{len(expected)} histograms"
-            )
-        if stage_failures:
-            raise RuntimeError(
-                f"Sequential stage {name} failed validation: "
-                + "; ".join(stage_failures)
-            )
+        return not stage_failures
 
     # Stage 1: only the stable terms configured in the base project
     # (background, histogram scale and HAP Dij/HStrain) are active.
-    execute_stage("stage1_stable")
+    stage_ok = execute_stage("stage1_stable")
+    if not stage_ok:
+        halted_after_stage = "stage1_stable"
 
-    if refine_displacement:
+    if stage_ok and refine_displacement:
         for histogram in project.histograms():
             if "DisplaceX" in histogram.data["Sample Parameters"]:
                 histogram.set_refinements(
                     {"Sample Parameters": ["DisplaceX"]}
                 )
         project.set_Controls("seqCopy", False)
-        execute_stage("stage2_geometry", ("DisplaceX",))
+        stage_ok = execute_stage("stage2_geometry", ("DisplaceX",))
+        if not stage_ok:
+            halted_after_stage = "stage2_geometry"
 
     complex_stage = refine_phase_fractions or any(
         model != "off" for model in size_models + mustrain_models
     )
-    if complex_stage:
+    if stage_ok and complex_stage:
         for index, phase in enumerate(project.phases()):
             phase.set_HAP_refinements(
                 {"Scale": bool(refine_phase_fractions)}, "all"
@@ -863,9 +1345,57 @@ def run_sequence(
             required.append("Size;")
         if any(model != "off" for model in mustrain_models):
             required.append("Mustrain;")
-        execute_stage("stage3_phase_profile", tuple(required))
+        stage_ok = execute_stage("stage3_phase_profile", tuple(required))
+        if not stage_ok:
+            halted_after_stage = "stage3_phase_profile"
 
-    if any(atom_flags):
+    if stage_ok and any(atom_flags):
+        atomic_gate_failures = []
+        sequence = project.seqref()
+        if sequence is None:
+            atomic_gate_failures.append(
+                "No completed pre-atomic sequential covariance is available"
+            )
+        else:
+            for histogram_name in sequence.histograms():
+                data = sequence.data[histogram_name]
+                r_values = data.get("Rvals", {})
+                observations = r_values.get("Nobs")
+                variables = r_values.get("Nvars")
+                if (
+                    observations is None
+                    or variables in {None, 0}
+                    or float(observations) / float(variables) < 10
+                ):
+                    atomic_gate_failures.append(
+                        f"{histogram_name}: Nobs/Nvars is unavailable or below 10"
+                    )
+                maximum = _covariance_correlations(data).get(
+                    "max_abs_percent"
+                )
+                if maximum is None or float(maximum) >= 95:
+                    atomic_gate_failures.append(
+                        f"{histogram_name}: pre-atomic maximum correlation "
+                        f"is {maximum}%"
+                    )
+        if atomic_gate_failures:
+            stages.append(
+                {
+                    "name": "stage4_atoms_gate",
+                    "path": None,
+                    "sha256": None,
+                    "completed_histograms": (
+                        sequence.histograms() if sequence is not None else []
+                    ),
+                    "complete": False,
+                    "failures": atomic_gate_failures,
+                    "exception": None,
+                }
+            )
+            stage_ok = False
+            halted_after_stage = "stage4_atoms_gate"
+
+    if stage_ok and any(atom_flags):
         by_name = {phase.name: phase for phase in project.phases()}
         for phase_name, flags in zip(phase_names, atom_flags):
             by_name[phase_name].set_refinements(
@@ -877,7 +1407,9 @@ def run_sequence(
             required.append("::dA")
         if any("U" in flags for flags in atom_flags):
             required.append("AUiso")
-        execute_stage("stage4_atoms", tuple(required))
+        stage_ok = execute_stage("stage4_atoms", tuple(required))
+        if not stage_ok:
+            halted_after_stage = "stage4_atoms"
 
     project.save(str(output_path))
     sequence = project.seqref()
@@ -891,6 +1423,8 @@ def run_sequence(
         "completed_histograms": completed,
         "complete": set(expected) == set(completed),
         "stages": stages,
+        "halted_after_stage": halted_after_stage,
+        "integrity_status": "pass" if stage_ok else "partial",
     }
 
 
@@ -963,6 +1497,42 @@ def main() -> int:
     parser.add_argument("--max-shift-over-su", type=float, default=0.5)
     parser.add_argument("--max-anchor-rwp-over-rmin", type=float, default=3.0)
     parser.add_argument("--max-cycles", type=int, default=10)
+    parser.add_argument(
+        "--sequential-stage-max-passes",
+        type=int,
+        default=3,
+        help=(
+            "Repeat each sequential stage up to this many times while the "
+            "maximum final-cycle shift/esd remains above 1"
+        ),
+    )
+    parser.add_argument(
+        "--pattern-preflight",
+        choices=("strict", "warn", "off"),
+        default="strict",
+    )
+    parser.add_argument(
+        "--intensity-weighting",
+        choices=("preserve-input", "gsas-importer", "unknown"),
+        default="preserve-input",
+        help="Provenance declaration only; the driver never rewrites weights",
+    )
+    parser.add_argument("--cell-relative-tolerance", type=float, default=5e-4)
+    parser.add_argument("--volume-relative-tolerance", type=float, default=1e-3)
+    parser.add_argument("--mass-fraction-tolerance", type=float, default=0.02)
+    parser.add_argument("--rwp-direction-tolerance", type=float, default=0.25)
+    parser.add_argument("--residual-minimum-sigma", type=float, default=6.0)
+    parser.add_argument(
+        "--residual-minimum-pattern-percent", type=float, default=2.0
+    )
+    parser.add_argument(
+        "--residual-hard-pattern-percent", type=float, default=10.0
+    )
+    parser.add_argument(
+        "--residual-two-theta-tolerance", type=float, default=0.12
+    )
+    parser.add_argument("--allow-atomic-refinement", action="store_true")
+    parser.add_argument("--atomic-justification")
     parser.add_argument("--allow-missing-metadata", action="store_true")
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
@@ -984,10 +1554,44 @@ def main() -> int:
         raise SystemExit("--anchor-max-passes must be between 1 and 20")
     if not 1 <= args.max_cycles <= 50:
         raise SystemExit("--max-cycles must be between 1 and 50")
+    if not 1 <= args.sequential_stage_max_passes <= 10:
+        raise SystemExit(
+            "--sequential-stage-max-passes must be between 1 and 10"
+        )
     if args.max_shift_over_su <= 0:
         raise SystemExit("--max-shift-over-su must be positive")
     if args.max_anchor_rwp_over_rmin <= 1:
         raise SystemExit("--max-anchor-rwp-over-rmin must be greater than 1")
+    positive_tolerances = {
+        "--cell-relative-tolerance": args.cell_relative_tolerance,
+        "--volume-relative-tolerance": args.volume_relative_tolerance,
+        "--mass-fraction-tolerance": args.mass_fraction_tolerance,
+        "--rwp-direction-tolerance": args.rwp_direction_tolerance,
+        "--residual-minimum-sigma": args.residual_minimum_sigma,
+        "--residual-minimum-pattern-percent": (
+            args.residual_minimum_pattern_percent
+        ),
+        "--residual-hard-pattern-percent": args.residual_hard_pattern_percent,
+        "--residual-two-theta-tolerance": (
+            args.residual_two_theta_tolerance
+        ),
+    }
+    invalid_tolerances = [
+        name for name, value in positive_tolerances.items() if value <= 0
+    ]
+    if invalid_tolerances:
+        raise SystemExit(
+            "Audit tolerances must be positive: "
+            + ", ".join(invalid_tolerances)
+        )
+    if (
+        args.residual_hard_pattern_percent
+        < args.residual_minimum_pattern_percent
+    ):
+        raise SystemExit(
+            "--residual-hard-pattern-percent must be at least "
+            "--residual-minimum-pattern-percent"
+        )
     if args.displacement_mode == "displace-x":
         if args.goniometer_radius is None or args.goniometer_radius <= 0:
             raise SystemExit(
@@ -1034,10 +1638,26 @@ def main() -> int:
     )
     mustrain_axes = parse_axes(args.mustrain_axis, len(cifs))
     atom_flags = parse_atom_flags(args.atom_flags, len(cifs))
+    if any(atom_flags) and (
+        not args.allow_atomic_refinement
+        or not (args.atomic_justification or "").strip()
+    ):
+        raise SystemExit(
+            "Sequential atomic X/U refinement requires both "
+            "--allow-atomic-refinement and a nonblank --atomic-justification"
+        )
     frames = load_manifest(
         manifest_path,
         phase_names,
         allow_missing_metadata=args.allow_missing_metadata,
+    )
+    pattern_preflight = preflight_patterns(
+        frames,
+        mode=args.pattern_preflight,
+    )
+    metadata_audit = audit_manifest_metadata(
+        frames,
+        file_order_only=args.allow_missing_metadata,
     )
     anchors = select_anchor_frames(frames, args.anchor_orders)
     limits = (args.two_theta_min, args.two_theta_max)
@@ -1103,9 +1723,35 @@ def main() -> int:
             "max_shift_over_su": args.max_shift_over_su,
             "max_anchor_rwp_over_rmin": args.max_anchor_rwp_over_rmin,
             "max_cycles": args.max_cycles,
+            "sequential_stage_max_passes": (
+                args.sequential_stage_max_passes
+            ),
             "instrument_profile_status": args.instrument_profile_status,
             "instrument_profile_refinement": "locked",
+            "pattern_preflight": args.pattern_preflight,
+            "intensity_weighting": args.intensity_weighting,
+            "atomic_refinement_justification": (
+                args.atomic_justification if any(atom_flags) else None
+            ),
+            "audit_tolerances": {
+                "cell_relative_tolerance": args.cell_relative_tolerance,
+                "volume_relative_tolerance": args.volume_relative_tolerance,
+                "mass_fraction_tolerance": args.mass_fraction_tolerance,
+                "rwp_tolerance": args.rwp_direction_tolerance,
+                "residual_minimum_sigma": args.residual_minimum_sigma,
+                "residual_minimum_pattern_percent": (
+                    args.residual_minimum_pattern_percent
+                ),
+                "residual_hard_pattern_percent": (
+                    args.residual_hard_pattern_percent
+                ),
+                "residual_two_theta_tolerance": (
+                    args.residual_two_theta_tolerance
+                ),
+            },
         },
+        "pattern_preflight": pattern_preflight,
+        "metadata_audit": metadata_audit,
         "anchor_frames": [
             {"frame_id": frame["frame_id"], "order": frame["order"]}
             for frame in anchors
@@ -1198,6 +1844,9 @@ def main() -> int:
                 max_shift_over_su=args.max_shift_over_su,
                 max_rwp_over_rmin=args.max_anchor_rwp_over_rmin,
                 refine_phase_fractions=args.phase_fractions == "refine",
+                size_models=size_models,
+                mustrain_models=mustrain_models,
+                mustrain_axes=mustrain_axes,
             )
             result["gpx"] = {
                 "path": str(anchor_path),
@@ -1218,79 +1867,157 @@ def main() -> int:
             frames[0]["frame_id"],
             frames[-1]["frame_id"],
         }
-        rejected_endpoints = []
+        rejected_anchors = []
+        accepted_anchor_ids = set()
         for result in anchor_results:
-            if result["frame_id"] not in endpoint_ids:
-                continue
-            convergence = result["convergence"]
-            shift = convergence.get("max_shift_over_su")
-            quality_ratio = result["metrics"].get("Rwp_over_Rwp_min")
-            if (
-                not convergence.get("converged", False)
-                or convergence.get("SVD0", 0)
-                or shift is None
-                or float(shift) > args.max_shift_over_su
-                or quality_ratio is None
-                or float(quality_ratio) > args.max_anchor_rwp_over_rmin
+            if anchor_gate_passes(
+                result,
+                max_shift_over_su=args.max_shift_over_su,
+                max_rwp_over_rmin=args.max_anchor_rwp_over_rmin,
             ):
-                rejected_endpoints.append(
+                accepted_anchor_ids.add(result["frame_id"])
+            else:
+                rejected_anchors.append(
                     {
                         "frame_id": result["frame_id"],
-                        "convergence": convergence,
+                        "order": result["order"],
+                        "endpoint": result["frame_id"] in endpoint_ids,
+                        "convergence": result["convergence"],
                         "metrics": result["metrics"],
                     }
                 )
+        rejected_endpoints = [
+            item for item in rejected_anchors if item["endpoint"]
+        ]
         if rejected_endpoints:
             raise RuntimeError(
                 "Endpoint anchor gate failed; do not start a warm-start "
                 "sequence from an unstable representative fit: "
                 + json.dumps(rejected_endpoints, ensure_ascii=False)
             )
-
-        forward_base_path = sequences_dir / "sequence_base_forward.gpx"
-        project, forward_histogram_names = prepare_sequence_base(
-            G2sc=G2sc,
-            seed_anchor_path=anchor_paths[frames[0]["frame_id"]],
-            base_path=forward_base_path,
-            frames=frames,
-            phase_names=phase_names,
-            instrument=instrument,
-            xrd_format=args.xrd_format,
-            background_order=args.background_order,
-            limits=limits,
-            displacement_mode=args.displacement_mode,
-            goniometer_radius=args.goniometer_radius,
-            refine_displacement_in_sequence=False,
-            refine_phase_fractions=False,
-            hstrain_masks=hstrain_masks,
-            max_cycles=args.max_cycles,
-        )
-        del project
-        reverse_frames = list(reversed(frames))
-        reverse_base_path = sequences_dir / "sequence_base_reverse.gpx"
-        project, reverse_histogram_names = prepare_sequence_base(
-            G2sc=G2sc,
-            seed_anchor_path=anchor_paths[frames[-1]["frame_id"]],
-            base_path=reverse_base_path,
-            frames=reverse_frames,
-            phase_names=phase_names,
-            instrument=instrument,
-            xrd_format=args.xrd_format,
-            background_order=args.background_order,
-            limits=limits,
-            displacement_mode=args.displacement_mode,
-            goniometer_radius=args.goniometer_radius,
-            refine_displacement_in_sequence=False,
-            refine_phase_fractions=False,
-            hstrain_masks=hstrain_masks,
-            max_cycles=args.max_cycles,
-        )
-        del project
-        plan["frames"] = frames
-        plan["histogram_order"] = {
-            "forward": forward_histogram_names,
-            "reverse": reverse_histogram_names,
+        plan["anchor_gate"] = {
+            "accepted_frame_ids": sorted(accepted_anchor_ids),
+            "rejected": rejected_anchors,
+            "policy": (
+                "Rejected non-endpoint anchors remain diagnostic only. "
+                "Accepted anchors are actual propagation checkpoints."
+            ),
         }
+
+        reference_frame_id = frames[0]["frame_id"]
+        reference_cells = read_reference_cells(
+            G2sc,
+            anchor_paths[reference_frame_id],
+            phase_names,
+        )
+        plan["common_reference_cell"] = {
+            "source_frame_id": reference_frame_id,
+            "source_anchor": str(anchor_paths[reference_frame_id]),
+            "phases": {
+                name: {
+                    "refine_flag": bool(cell[0]),
+                    **{
+                        label: float(value)
+                        for label, value in zip(CELL_LABELS, cell[1:])
+                    },
+                }
+                for name, cell in reference_cells.items()
+            },
+            "purpose": (
+                "Use identical fixed global-cell components in forward and "
+                "reverse runs; per-frame enabled HStrain components remain "
+                "refinable."
+            ),
+        }
+        segment_definitions = {
+            direction: build_anchor_segments(
+                frames,
+                accepted_anchor_ids,
+                direction=direction,
+            )
+            for direction in ("forward", "reverse")
+        }
+        runtime_segments: dict[str, list[dict[str, Any]]] = {
+            "forward": [],
+            "reverse": [],
+        }
+        plan["checkpoint_segments"] = {"forward": [], "reverse": []}
+        for direction in ("forward", "reverse"):
+            for definition in segment_definitions[direction]:
+                segment_id = definition["segment_id"]
+                if (
+                    args.phase_fractions == "refine"
+                    and any(
+                        frame["phase_set"]
+                        != definition["frames"][0]["phase_set"]
+                        for frame in definition["frames"][1:]
+                    )
+                ):
+                    raise RuntimeError(
+                        f"{segment_id} crosses a phase_set change. Supply "
+                        "stable transition anchors or keep phase fractions fixed."
+                    )
+                segment_dir = sequences_dir / segment_id
+                segment_dir.mkdir()
+                base_path = segment_dir / "sequence_base.gpx"
+                project, histogram_names, seed_hstrain_offsets = (
+                    prepare_sequence_base(
+                        G2sc=G2sc,
+                        seed_anchor_path=anchor_paths[
+                            definition["checkpoint_frame_id"]
+                        ],
+                        base_path=base_path,
+                        frames=definition["frames"],
+                        phase_names=phase_names,
+                        instrument=instrument,
+                        xrd_format=args.xrd_format,
+                        background_order=args.background_order,
+                        limits=limits,
+                        displacement_mode=args.displacement_mode,
+                        goniometer_radius=args.goniometer_radius,
+                        refine_displacement_in_sequence=False,
+                        refine_phase_fractions=False,
+                        hstrain_masks=hstrain_masks,
+                        max_cycles=args.max_cycles,
+                        reference_cells=reference_cells,
+                    )
+                )
+                del project
+                frame_snapshot = json.loads(
+                    json.dumps(definition["frames"], ensure_ascii=False)
+                )
+                output_path = segment_dir / "sequential.gpx"
+                record = {
+                    "segment_id": segment_id,
+                    "checkpoint_frame_id": definition[
+                        "checkpoint_frame_id"
+                    ],
+                    "frames": frame_snapshot,
+                    "base_path": base_path,
+                    "output_path": output_path,
+                }
+                runtime_segments[direction].append(record)
+                plan["checkpoint_segments"][direction].append(
+                    {
+                        "segment_id": segment_id,
+                        "checkpoint_frame_id": definition[
+                            "checkpoint_frame_id"
+                        ],
+                        "frame_ids": [
+                            frame["frame_id"] for frame in frame_snapshot
+                        ],
+                        "histogram_order": histogram_names,
+                        "seed_hstrain_offsets": seed_hstrain_offsets,
+                        "base": {
+                            "path": str(base_path),
+                            "sha256": sha256(base_path),
+                        },
+                    }
+                )
+        plan["frames"] = [
+            {key: value for key, value in frame.items() if key != "histogram"}
+            for frame in frames
+        ]
         plan["run_dir"] = str(run_dir)
         plan["input_bundle"] = {
             "path": str(input_bundle_path),
@@ -1299,42 +2026,33 @@ def main() -> int:
         manifest_json = run_dir / "sequence_manifest.json"
         write_json_atomic(manifest_json, plan)
 
-        forward_path = sequences_dir / "sequential_forward.gpx"
-        reverse_path = sequences_dir / "sequential_reverse.gpx"
-        forward_run = run_sequence(
-            G2sc=G2sc,
-            base_path=forward_base_path,
-            output_path=forward_path,
-            reverse=False,
-            max_cycles=args.max_cycles,
-            phase_names=phase_names,
-            refine_displacement=args.refine_displacement_in_sequence,
-            refine_phase_fractions=args.phase_fractions == "refine",
-            size_models=size_models,
-            mustrain_models=mustrain_models,
-            mustrain_axes=mustrain_axes,
-            atom_flags=atom_flags,
-        )
-        reverse_run = run_sequence(
-            G2sc=G2sc,
-            base_path=reverse_base_path,
-            output_path=reverse_path,
-            reverse=True,
-            max_cycles=args.max_cycles,
-            phase_names=phase_names,
-            refine_displacement=args.refine_displacement_in_sequence,
-            refine_phase_fractions=args.phase_fractions == "refine",
-            size_models=size_models,
-            mustrain_models=mustrain_models,
-            mustrain_axes=mustrain_axes,
-            atom_flags=atom_flags,
-        )
-        audit_outputs = materialize_audit(
+        for direction in ("forward", "reverse"):
+            for record in runtime_segments[direction]:
+                record["run"] = run_sequence(
+                    G2sc=G2sc,
+                    base_path=record["base_path"],
+                    output_path=record["output_path"],
+                    reverse=direction == "reverse",
+                    max_cycles=args.max_cycles,
+                    stage_maximum_passes=(
+                        args.sequential_stage_max_passes
+                    ),
+                    phase_names=phase_names,
+                    refine_displacement=args.refine_displacement_in_sequence,
+                    refine_phase_fractions=args.phase_fractions == "refine",
+                    size_models=size_models,
+                    mustrain_models=mustrain_models,
+                    mustrain_axes=mustrain_axes,
+                    atom_flags=atom_flags,
+                )
+        audit_tolerances = plan["settings"]["audit_tolerances"]
+        audit_outputs = materialize_segmented_audit(
             manifest_path=manifest_json,
-            forward_gpx=forward_path,
-            reverse_gpx=reverse_path,
+            forward_segments=runtime_segments["forward"],
+            reverse_segments=runtime_segments["reverse"],
             output_dir=results_dir,
             gsasii_path=gsasii_path,
+            audit_tolerances=audit_tolerances,
         )
         summary = {
             "schema_version": 1,
@@ -1353,18 +2071,40 @@ def main() -> int:
                 "path": str(input_bundle_path),
                 "sha256": sha256(input_bundle_path),
             },
-            "sequence_bases": {
-                "forward": {
-                    "path": str(forward_base_path),
-                    "sha256": sha256(forward_base_path),
-                },
-                "reverse": {
-                    "path": str(reverse_base_path),
-                    "sha256": sha256(reverse_base_path),
-                },
+            "checkpoint_segments": {
+                direction: [
+                    {
+                        "segment_id": record["segment_id"],
+                        "checkpoint_frame_id": record[
+                            "checkpoint_frame_id"
+                        ],
+                        "frame_ids": [
+                            frame["frame_id"] for frame in record["frames"]
+                        ],
+                        "base": {
+                            "path": str(record["base_path"]),
+                            "sha256": sha256(record["base_path"]),
+                        },
+                        "run": record["run"],
+                    }
+                    for record in runtime_segments[direction]
+                ]
+                for direction in ("forward", "reverse")
             },
-            "forward": forward_run,
-            "reverse": reverse_run,
+            "forward": {
+                "segment_count": len(runtime_segments["forward"]),
+                "complete": all(
+                    record["run"]["complete"]
+                    for record in runtime_segments["forward"]
+                ),
+            },
+            "reverse": {
+                "segment_count": len(runtime_segments["reverse"]),
+                "complete": all(
+                    record["run"]["complete"]
+                    for record in runtime_segments["reverse"]
+                ),
+            },
             "audit_outputs": {
                 role: {"path": str(path), "sha256": sha256(path)}
                 for role, path in audit_outputs.items()

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import statistics
@@ -110,6 +111,31 @@ def _parameter(
     }
 
 
+def _last_cycle_shift_over_su(sequence_data: dict[str, Any]) -> float | None:
+    """Return the largest absolute final-cycle shift/esd reported by GSAS-II."""
+    last_shifts = sequence_data.get("Rvals", {}).get("lastShifts", {})
+    sigmas = sequence_data.get("sig", [])
+    if not isinstance(last_shifts, dict):
+        return None
+    ratios = []
+    for variable, sigma in zip(
+        sequence_data.get("varyList", []),
+        sigmas,
+    ):
+        shift = last_shifts.get(variable)
+        try:
+            sigma_value = float(sigma)
+            shift_value = float(shift)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(sigma_value) or sigma_value <= 0:
+            continue
+        if not math.isfinite(shift_value):
+            continue
+        ratios.append(abs(shift_value / sigma_value))
+    return max(ratios) if ratios else None
+
+
 def extract_sequence_results(
     gpx_path: Path,
     manifest: dict[str, Any],
@@ -164,6 +190,7 @@ def extract_sequence_results(
             continue
         histogram_id = int(histogram.data["data"][0]["hId"])
         r_values = sequence_data.get("Rvals", {})
+        last_cycle_shift = _last_cycle_shift_over_su(sequence_data)
         correlations = _covariance_correlations(sequence_data)
         cells = {
             phase.name: _cell_payload(sequence, phase, histogram_name)
@@ -215,7 +242,9 @@ def extract_sequence_results(
                 "convergence": {
                     "converged": bool(r_values.get("converged", False)),
                     "SVD0": int(r_values.get("SVD0", 0) or 0),
-                    "max_shift_over_su": (
+                    "max_shift_over_su": last_cycle_shift,
+                    "max_last_cycle_shift_over_su": last_cycle_shift,
+                    "max_total_shift_over_su": (
                         float(r_values["Max shft/sig"])
                         if r_values.get("Max shft/sig") is not None
                         else None
@@ -280,6 +309,118 @@ def extract_sequence_results(
     )
 
 
+def extract_segmented_sequence_results(
+    segments: list[dict[str, Any]],
+    manifest: dict[str, Any],
+    *,
+    direction: str,
+    gsasii_path: Path,
+) -> dict[str, Any]:
+    """Extract and merge checkpoint-seeded segment GPXs without hiding failures."""
+    rows = []
+    missing = []
+    segment_records = []
+    for segment in segments:
+        gpx_path = Path(segment["run"]["path"]).expanduser().resolve()
+        submanifest = {
+            **manifest,
+            "frames": segment["frames"],
+        }
+        try:
+            result = extract_sequence_results(
+                gpx_path,
+                submanifest,
+                direction=direction,
+                gsasii_path=gsasii_path,
+            )
+            for row in result["frames"]:
+                row["segment"] = {
+                    "segment_id": segment["segment_id"],
+                    "checkpoint_frame_id": segment["checkpoint_frame_id"],
+                    "integrity_status": segment["run"]["integrity_status"],
+                    "halted_after_stage": segment["run"].get(
+                        "halted_after_stage"
+                    ),
+                }
+                rows.append(row)
+            missing.extend(result["missing_frames"])
+        except Exception as exc:
+            for frame in segment["frames"]:
+                missing.append(
+                    {
+                        "frame_id": frame["frame_id"],
+                        "histogram": frame.get("histogram"),
+                        "reason": (
+                            f"Segment extraction failed for "
+                            f"{segment['segment_id']}: {type(exc).__name__}: {exc}"
+                        ),
+                    }
+                )
+        segment_records.append(
+            {
+                "segment_id": segment["segment_id"],
+                "checkpoint_frame_id": segment["checkpoint_frame_id"],
+                "frame_ids": [frame["frame_id"] for frame in segment["frames"]],
+                "run": segment["run"],
+            }
+        )
+    rows.sort(key=lambda item: item["order"])
+    last_index = len(manifest["frames"]) - 1
+    for ordinal, row in enumerate(rows):
+        row["run_index"] = ordinal if direction == "forward" else last_index - ordinal
+    duplicate_ids = sorted(
+        {
+            row["frame_id"]
+            for row in rows
+            if sum(item["frame_id"] == row["frame_id"] for item in rows) > 1
+        }
+    )
+    if duplicate_ids:
+        raise ValueError(
+            "Segment extraction produced duplicate frames: "
+            + ", ".join(duplicate_ids)
+        )
+    expected_ids = {frame["frame_id"] for frame in manifest["frames"]}
+    completed_ids = {row["frame_id"] for row in rows}
+    already_missing = {item["frame_id"] for item in missing}
+    for frame_id in sorted(expected_ids - completed_ids - already_missing):
+        missing.append(
+            {
+                "frame_id": frame_id,
+                "histogram": None,
+                "reason": "Frame was not assigned a completed segment result",
+            }
+        )
+    digest_payload = [
+        {
+            "segment_id": item["segment_id"],
+            "sha256": item["run"]["sha256"],
+        }
+        for item in segment_records
+    ]
+    digest = hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return json_clean(
+        {
+            "schema_version": 2,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "direction": direction,
+            "gpx": {
+                "path": f"segmented:{direction}",
+                "sha256": digest,
+                "segments": digest_payload,
+            },
+            "lst": {"path": None, "exists": False, "sha256": None},
+            "frame_count_expected": len(manifest["frames"]),
+            "frame_count_completed": len(rows),
+            "missing_frames": missing,
+            "frames": rows,
+            "segments": segment_records,
+        }
+    )
+
+
 def write_results_csv(path: Path, results: dict[str, Any]) -> None:
     phase_names = sorted(
         {
@@ -305,6 +446,7 @@ def write_results_csv(path: Path, results: dict[str, Any]) -> None:
         "converged",
         "SVD0",
         "max_shift_over_su",
+        "max_total_shift_over_su",
         "max_abs_correlation_percent",
         "frozen_variable_count",
     ]
@@ -330,6 +472,9 @@ def write_results_csv(path: Path, results: dict[str, Any]) -> None:
                 "max_shift_over_su": frame["convergence"][
                     "max_shift_over_su"
                 ],
+                "max_total_shift_over_su": frame["convergence"].get(
+                    "max_total_shift_over_su"
+                ),
                 "max_abs_correlation_percent": frame["correlations"][
                     "max_abs_percent"
                 ],
@@ -412,6 +557,75 @@ def _continuity_outliers(results: dict[str, Any]) -> list[dict[str, Any]]:
     return outliers
 
 
+def _significant_residual_peaks(
+    frame: dict[str, Any],
+    *,
+    minimum_sigma: float,
+    minimum_pattern_percent: float,
+) -> list[dict[str, Any]]:
+    peaks = frame.get("residual_audit", {}).get("positive_local_maxima", [])
+    return [
+        peak
+        for peak in peaks
+        if peak.get("robust_sigma_above_residual") is not None
+        and float(peak["robust_sigma_above_residual"]) >= minimum_sigma
+        and peak.get("fraction_of_pattern_max_percent") is not None
+        and float(peak["fraction_of_pattern_max_percent"])
+        >= minimum_pattern_percent
+    ]
+
+
+def _matched_residual_peaks(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    *,
+    minimum_sigma: float,
+    minimum_pattern_percent: float,
+    two_theta_tolerance: float,
+) -> list[dict[str, Any]]:
+    first_peaks = _significant_residual_peaks(
+        first,
+        minimum_sigma=minimum_sigma,
+        minimum_pattern_percent=minimum_pattern_percent,
+    )
+    second_peaks = _significant_residual_peaks(
+        second,
+        minimum_sigma=minimum_sigma,
+        minimum_pattern_percent=minimum_pattern_percent,
+    )
+    matches = []
+    for peak in first_peaks:
+        candidates = [
+            other
+            for other in second_peaks
+            if abs(float(peak["two_theta"]) - float(other["two_theta"]))
+            <= two_theta_tolerance
+        ]
+        if not candidates:
+            continue
+        other = min(
+            candidates,
+            key=lambda item: abs(
+                float(peak["two_theta"]) - float(item["two_theta"])
+            ),
+        )
+        matches.append(
+            {
+                "two_theta_forward": peak["two_theta"],
+                "two_theta_reverse": other["two_theta"],
+                "maximum_pattern_percent": max(
+                    float(peak["fraction_of_pattern_max_percent"]),
+                    float(other["fraction_of_pattern_max_percent"]),
+                ),
+                "minimum_sigma": min(
+                    float(peak["robust_sigma_above_residual"]),
+                    float(other["robust_sigma_above_residual"]),
+                ),
+            }
+        )
+    return matches
+
+
 def compare_directions(
     forward: dict[str, Any],
     reverse: dict[str, Any],
@@ -420,6 +634,10 @@ def compare_directions(
     volume_relative_tolerance: float = 1e-3,
     mass_fraction_tolerance: float = 0.02,
     rwp_tolerance: float = 0.25,
+    residual_minimum_sigma: float = 6.0,
+    residual_minimum_pattern_percent: float = 2.0,
+    residual_hard_pattern_percent: float = 10.0,
+    residual_two_theta_tolerance: float = 0.12,
 ) -> dict[str, Any]:
     """Compare path dependence and per-frame safety for two sequence runs."""
     forward_by_id = {frame["frame_id"]: frame for frame in forward["frames"]}
@@ -433,6 +651,7 @@ def compare_directions(
     comparisons = []
     hard_failures = []
     review_flags = []
+    uncertainty_gaps = []
 
     for frame_id in frame_ids:
         first = forward_by_id.get(frame_id)
@@ -458,15 +677,25 @@ def compare_directions(
                     f"{direction}: frozen variables="
                     + ",".join(convergence["frozen_variables"])
                 )
-            maximum_shift = convergence.get("max_shift_over_su")
+            maximum_shift = convergence.get(
+                "max_last_cycle_shift_over_su",
+                convergence.get("max_shift_over_su"),
+            )
             if maximum_shift is not None and float(maximum_shift) > 1:
                 review_issues.append(
-                    f"{direction}: max shift/esd={maximum_shift:.6g}"
+                    f"{direction}: final-cycle max shift/esd="
+                    f"{maximum_shift:.6g}"
                 )
             maximum = frame["correlations"].get("max_abs_percent")
             if maximum is not None and float(maximum) >= 95:
                 review_issues.append(
                     f"{direction}: correlation={maximum:.3f}%"
+                )
+            segment = frame.get("segment", {})
+            if segment.get("integrity_status") == "partial":
+                review_issues.append(
+                    f"{direction}: checkpoint segment "
+                    f"{segment.get('segment_id')} is partial"
                 )
         rwp_first = first["metrics"]["Rwp"]["value"]
         rwp_second = second["metrics"]["Rwp"]["value"]
@@ -500,6 +729,18 @@ def compare_directions(
                     "relative": relative,
                     "tolerance": tolerance,
                     "pass": relative <= tolerance,
+                    "uncertainty_components": {
+                        "forward_formal_esd": first["cells"][phase][key].get(
+                            "esd"
+                        ),
+                        "reverse_formal_esd": second["cells"][phase][key].get(
+                            "esd"
+                        ),
+                        "direction_half_span": abs(
+                            value_first - value_second
+                        )
+                        / 2,
+                    },
                 }
                 if relative > tolerance:
                     review_issues.append(
@@ -529,6 +770,39 @@ def compare_directions(
                 review_issues.append(
                     f"{phase} mass-fraction direction delta={delta:.6g}"
                 )
+        for direction, frame in (("forward", first), ("reverse", second)):
+            missing_fraction_esds = sorted(
+                phase
+                for phase, payload in frame["mass_fractions"].items()
+                if payload.get("esd") is None
+            )
+            if missing_fraction_esds:
+                uncertainty_gaps.append(
+                    {
+                        "frame_id": frame_id,
+                        "direction": direction,
+                        "quantity": "mass_fraction",
+                        "missing_phase_esds": missing_fraction_esds,
+                    }
+                )
+
+        residual_matches = _matched_residual_peaks(
+            first,
+            second,
+            minimum_sigma=residual_minimum_sigma,
+            minimum_pattern_percent=residual_minimum_pattern_percent,
+            two_theta_tolerance=residual_two_theta_tolerance,
+        )
+        for peak in residual_matches:
+            issue = (
+                "persistent positive residual near "
+                f"{peak['two_theta_forward']:.4g} degrees "
+                f"({peak['maximum_pattern_percent']:.3g}% of pattern maximum)"
+            )
+            if peak["maximum_pattern_percent"] >= residual_hard_pattern_percent:
+                hard_issues.append(issue)
+            else:
+                review_issues.append(issue)
 
         issues = hard_issues + review_issues
         comparison = {
@@ -537,6 +811,7 @@ def compare_directions(
             "Rwp_absolute_delta": rwp_delta,
             "cell_deltas": cell_deltas,
             "mass_fraction_deltas": fraction_deltas,
+            "persistent_residual_peaks": residual_matches,
             "issues": issues,
             "hard_issues": hard_issues,
             "review_issues": review_issues,
@@ -565,6 +840,17 @@ def compare_directions(
                 )
             }
         )
+    if uncertainty_gaps:
+        review_flags.append(
+            {
+                "reason": (
+                    "Formal mass-fraction ESDs are unavailable for "
+                    f"{len(uncertainty_gaps)} direction/frame result(s); "
+                    "values may be used for screening but not reported as "
+                    "fully uncertainty-qualified quantitative fractions"
+                )
+            }
+        )
     if forward["missing_frames"] or reverse["missing_frames"]:
         hard_failures.append(
             {
@@ -585,7 +871,13 @@ def compare_directions(
                 "mass_fraction_absolute": mass_fraction_tolerance,
                 "Rwp_absolute": rwp_tolerance,
                 "maximum_allowed_correlation_percent": 95.0,
-                "maximum_review_shift_over_su": 1.0,
+                "maximum_review_final_cycle_shift_over_su": 1.0,
+                "residual_minimum_robust_sigma": residual_minimum_sigma,
+                "residual_minimum_pattern_percent": (
+                    residual_minimum_pattern_percent
+                ),
+                "residual_hard_pattern_percent": residual_hard_pattern_percent,
+                "residual_two_theta_tolerance": residual_two_theta_tolerance,
             },
             "forward_gpx": forward["gpx"],
             "reverse_gpx": reverse["gpx"],
@@ -593,6 +885,7 @@ def compare_directions(
             "hard_failures": hard_failures,
             "review_flags": review_flags,
             "continuity_outliers": continuity,
+            "uncertainty_gaps": uncertainty_gaps,
         }
     )
 
@@ -634,8 +927,20 @@ def build_report(
         f"- Source manifest: `{manifest['manifest']['path']}`",
         f"- Instrument: `{manifest['instrument']['path']}`",
         (
+            f"- Instrument-profile status: "
+            f"`{manifest['instrument']['profile_status']}`"
+        ),
+        (
             f"- Staged input-bundle manifest: "
             f"`{manifest.get('input_bundle', {}).get('path', 'not recorded')}`"
+        ),
+        (
+            f"- Metadata mode: "
+            f"`{manifest.get('metadata_audit', {}).get('mode', 'not recorded')}`"
+        ),
+        (
+            f"- Pattern preflight: "
+            f"`{manifest.get('pattern_preflight', {}).get('status', 'not recorded')}`"
         ),
         "- Phase models:",
     ]
@@ -648,11 +953,15 @@ def build_report(
             "",
             "## Refinement design",
             "",
-            "Representative anchor frames were refined before the sequence. "
+            "Accepted anchor frames were refined before the sequence and used "
+            "as actual propagation checkpoints. "
             "The instrument profile was locked. Global phase cells were fixed "
             "for sequential fitting and histogram-dependent lattice changes "
             "were represented with HAP Dij/HStrain terms. Forward and reverse "
-            "warm-start sequences were compared for path dependence.",
+            "warm-start sequences were compared for path dependence. Both "
+            "directions used the recorded common global reference cell, while "
+            "retaining distinct checkpoint pattern/HAP seeds. A failed segment "
+            "was retained as partial evidence rather than aborting other segments.",
             "",
             "## Direction sensitivity",
             "",
@@ -684,6 +993,37 @@ def build_report(
             )
     else:
         lines.append("- No robust cell-volume continuity outlier was detected.")
+    lines.extend(["", "## Residual model check", ""])
+    residual_rows = [
+        (item["frame_id"], peak)
+        for item in audit["frame_comparisons"]
+        for peak in item.get("persistent_residual_peaks", [])
+    ]
+    if residual_rows:
+        for frame_id, peak in residual_rows:
+            lines.append(
+                f"- `{frame_id}`: persistent positive residual near "
+                f"{peak['two_theta_forward']:.5g} degrees, "
+                f"{peak['maximum_pattern_percent']:.4g}% of the pattern maximum."
+            )
+    else:
+        lines.append(
+            "- No positive residual peak exceeded the declared robust threshold "
+            "in both directions."
+        )
+    lines.extend(["", "## Uncertainty availability", ""])
+    if audit.get("uncertainty_gaps"):
+        lines.append(
+            "- Formal mass-fraction ESDs were unavailable for "
+            f"{len(audit['uncertainty_gaps'])} direction/frame result(s). "
+            "The fractions remain normalized screening values, not fully "
+            "uncertainty-qualified quantitative results."
+        )
+    else:
+        lines.append(
+            "- No missing formal mass-fraction ESD was detected in the "
+            "exported direction/frame results."
+        )
     lines.extend(
         [
             "",
@@ -769,22 +1109,16 @@ def validate_report(
     }
 
 
-def materialize_audit(
+def _write_materialized_audit(
     *,
     manifest_path: Path,
-    forward_gpx: Path,
-    reverse_gpx: Path,
+    manifest: dict[str, Any],
+    forward: dict[str, Any],
+    reverse: dict[str, Any],
     output_dir: Path,
-    gsasii_path: Path,
+    audit_tolerances: dict[str, float] | None = None,
 ) -> dict[str, Path]:
-    manifest = _require_json(manifest_path, "sequence manifest")
     output_dir.mkdir(parents=True, exist_ok=True)
-    forward = extract_sequence_results(
-        forward_gpx, manifest, direction="forward", gsasii_path=gsasii_path
-    )
-    reverse = extract_sequence_results(
-        reverse_gpx, manifest, direction="reverse", gsasii_path=gsasii_path
-    )
     forward_json = output_dir / "sequential_results_forward.json"
     reverse_json = output_dir / "sequential_results_reverse.json"
     forward_csv = output_dir / "sequential_results_forward.csv"
@@ -796,7 +1130,11 @@ def materialize_audit(
     write_json_atomic(reverse_json, reverse)
     write_results_csv(forward_csv, forward)
     write_results_csv(reverse_csv, reverse)
-    audit = compare_directions(forward, reverse)
+    audit = compare_directions(
+        forward,
+        reverse,
+        **(audit_tolerances or {}),
+    )
     audit["inputs"] = {
         "manifest": {"path": str(manifest_path), "sha256": sha256(manifest_path)},
         "forward_results": {
@@ -832,6 +1170,64 @@ def materialize_audit(
         "report": report_path,
         "report_validation": validation_path,
     }
+
+
+def materialize_audit(
+    *,
+    manifest_path: Path,
+    forward_gpx: Path,
+    reverse_gpx: Path,
+    output_dir: Path,
+    gsasii_path: Path,
+    audit_tolerances: dict[str, float] | None = None,
+) -> dict[str, Path]:
+    manifest = _require_json(manifest_path, "sequence manifest")
+    forward = extract_sequence_results(
+        forward_gpx, manifest, direction="forward", gsasii_path=gsasii_path
+    )
+    reverse = extract_sequence_results(
+        reverse_gpx, manifest, direction="reverse", gsasii_path=gsasii_path
+    )
+    return _write_materialized_audit(
+        manifest_path=manifest_path,
+        manifest=manifest,
+        forward=forward,
+        reverse=reverse,
+        output_dir=output_dir,
+        audit_tolerances=audit_tolerances,
+    )
+
+
+def materialize_segmented_audit(
+    *,
+    manifest_path: Path,
+    forward_segments: list[dict[str, Any]],
+    reverse_segments: list[dict[str, Any]],
+    output_dir: Path,
+    gsasii_path: Path,
+    audit_tolerances: dict[str, float] | None = None,
+) -> dict[str, Path]:
+    manifest = _require_json(manifest_path, "sequence manifest")
+    forward = extract_segmented_sequence_results(
+        forward_segments,
+        manifest,
+        direction="forward",
+        gsasii_path=gsasii_path,
+    )
+    reverse = extract_segmented_sequence_results(
+        reverse_segments,
+        manifest,
+        direction="reverse",
+        gsasii_path=gsasii_path,
+    )
+    return _write_materialized_audit(
+        manifest_path=manifest_path,
+        manifest=manifest,
+        forward=forward,
+        reverse=reverse,
+        output_dir=output_dir,
+        audit_tolerances=audit_tolerances,
+    )
 
 
 def main() -> int:

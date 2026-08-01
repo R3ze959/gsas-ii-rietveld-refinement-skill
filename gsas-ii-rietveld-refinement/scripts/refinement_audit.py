@@ -317,7 +317,17 @@ def _residual_audit(histogram: Any, count: int = 10) -> dict[str, Any]:
     finite = np.isfinite(x) & np.isfinite(observed) & np.isfinite(residual)
     x, observed, residual = x[finite], observed[finite], residual[finite]
     if residual.size < 3:
-        return {"positive_local_maxima": [], "durbin_watson_unweighted": None}
+        return {
+            "positive_local_maxima": [],
+            "durbin_watson_unweighted": None,
+            "robust_residual_sigma": None,
+            "pattern_maximum_observed": None,
+        }
+    residual_median = float(np.median(residual))
+    robust_sigma = float(
+        1.4826 * np.median(np.abs(residual - residual_median))
+    )
+    pattern_maximum = float(np.max(np.abs(observed)))
     local = np.where(
         (residual[1:-1] >= residual[:-2])
         & (residual[1:-1] >= residual[2:])
@@ -347,10 +357,22 @@ def _residual_audit(histogram: Any, count: int = 10) -> dict[str, Any]:
                     if observed[index] != 0
                     else None
                 ),
+                "fraction_of_pattern_max_percent": (
+                    float(100 * residual[index] / pattern_maximum)
+                    if pattern_maximum > 0
+                    else None
+                ),
+                "robust_sigma_above_residual": (
+                    float((residual[index] - residual_median) / robust_sigma)
+                    if robust_sigma > 0
+                    else None
+                ),
             }
             for index in selected
         ],
         "durbin_watson_unweighted": dw,
+        "robust_residual_sigma": robust_sigma,
+        "pattern_maximum_observed": pattern_maximum,
     }
 
 

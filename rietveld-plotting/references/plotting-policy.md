@@ -43,7 +43,7 @@
 
 - Use PNG as the default and preferred retained output.
 - Use `TIF`, `PDF`, or `SVG` only when the user explicitly requests a submission format.
-- Do not keep plot CSV files or plot manifests unless the user requests reproducibility/debug artifacts.
+- For a single-pattern GPX figure, do not keep plot CSV files or debug manifests unless the user requests them. Temperature-series and experimental-operando routes must retain their machine-readable plot manifest because it records source hashes, audit state, selected frames, synchronization, and display-only transformations.
 - Keep only the accepted final image after visual verification; remove plotting drafts.
 - Default to `RIETVELD_PLOT_OUTPUT/<sample-id>/`, or `~/Rietveld_plot_results/<sample-id>/` when the environment variable is unset, when no destination is supplied.
 

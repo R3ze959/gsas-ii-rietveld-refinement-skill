@@ -1,6 +1,6 @@
 ---
 name: gsas-ii-rietveld-refinement
-description: Actively classify a powder-XRD request, then run careful single-pattern, independent-batch, or manifest-driven sequential GSAS-II Rietveld refinement and archive final results without generating figures. Use for GSAS-II/GSAS/EXPGUI powder refinement, Rietveld refinement, XRD refinement, CIF-based refinement, ambiguous multiple-pattern inputs, detector images that may require 1D integration, operando/in-situ/in situ XRD, temperature/time/voltage series, sequential refinement, multiphase refinement, reducing Rwp without distortion, comparing refined cells, organizing final CIF/XRD/GPX/LST/reports, or cleaning intermediate files. Do not use for plotting or restyling Rietveld figures; use a separate plotting skill.
+description: Actively classify a powder-XRD request, then run careful single-pattern, independent-batch, or manifest-driven sequential GSAS-II Rietveld refinement and archive final results without generating figures. Use for GSAS-II/GSAS/EXPGUI powder refinement, Rietveld refinement, XRD refinement, CIF-based refinement, ambiguous multiple-pattern inputs, detector images that may require 1D integration, operando/in-situ/in situ XRD, temperature/time/voltage series, sequential refinement, reducing Rwp without distortion, comparing refined cells, organizing final CIF/XRD/GPX/LST/reports, or cleaning intermediate files. Do not use for plotting or restyling Rietveld figures; use a separate plotting skill.
 ---
 
 # GSAS-II Rietveld Refinement
@@ -46,9 +46,12 @@ Use:
 
 - `scripts/classify_refinement_request.py` as the mandatory read-only first gate.
 - `scripts/refinement_core.py` for shared routing, manifest preflight, path validation, and category enforcement.
+- `scripts/convert_stoe_raw.py` for strictly validated STOE WinXPOW `RAW_1.06Powdat` frames. It exports unsmoothed XYE, verifies duplicated records, preserves source/output hashes and acquisition timestamps, and rejects unknown, truncated, incompatible, or zero-only frames.
+- `scripts/build_sequential_manifest.py` to join a frame index with experimental metadata by exact ID/order or bounded nearest time without interpolation.
 - `scripts/run_staged_refinement.py` to create the GPX candidates and `candidate_summary.json`.
 - `scripts/run_sequential_refinement.py` to stage inputs, refine anchor frames, run forward/reverse staged sequences, and create the sequence run summary.
 - `scripts/sequential_audit.py` to extract covariance-backed per-frame results, compare directions, and generate the validated sequence report.
+- `scripts/select_sequential_candidate.py` to compare at least two declared sequential models and reject any candidate whose audit is `fail`.
 - `scripts/select_refinement_candidate.py` to enforce the safety gate, export the final CIF, and bind selected file hashes into the candidate summary.
 - `scripts/build_validate_refinement_report.py` to generate or validate the report, metric labels, and crystallographic uncertainties.
 - `scripts/archive_refinement_results.py` to transactionally create the final archive and safely remove staging files.
@@ -79,17 +82,18 @@ Use:
 
 ## Sequential workflow
 
-1. Require a recorded `sequential_refinement` classification, then validate the manifest and every source hash. Reject duplicate frame IDs/orders, missing files, missing phase names, or file-order-only series unless the user deliberately enables that test mode.
-2. Run `run_sequential_refinement.py --plan-only`. Declare whether the instrument profile is calibrated. Production sequences keep the instrument profile locked.
-3. Refine start, middle, end, and requested transition-region anchors. The start and end anchors must pass convergence, SVD, shift/esd, and Rwp/Rwp-min gates before propagation.
-4. Keep each phase's global cell fixed in the sequence. Represent frame-dependent cell changes with HAP `Dij/HStrain`; do not vary global `Cell` in a sequential refinement.
-5. Run deterministic stages: stable background/scale/Dij first; optional sample displacement second; constrained phase fractions and justified size/microstrain third; optional atomic X/U terms last.
-6. Treat phase fractions as constrained quantities. If the declared `phase_set` changes, split into scientifically justified windows or keep fractions fixed; do not apply one invalid wildcard constraint across incompatible phase sets.
-7. Run forward from the first accepted anchor and reverse from the last accepted anchor. Never start both directions from the same endpoint model.
-8. Require every requested stage to contain its expected variable family and all frames. A missing stage, nonconvergence, SVD failure, or frozen variable is a hard failure.
-9. Read `sequential_audit.json`. Direction sensitivity, high correlation, shift/esd above 1, and robust trajectory discontinuities require review; they are not erased or relabeled as automatic success.
-10. Keep the exact staged manifest, instrument file, CIFs, and patterns with `input_bundle_manifest.json`, plus both GPX files, stage snapshots, CSV/JSON results, audit, report, and validation.
-11. Do not generate a figure. If requested later, route an accepted GPX and selected histogram to `rietveld-plotting`.
+1. Require a recorded `sequential_refinement` classification. Run strict one-dimensional pattern preflight, validate every source hash, and classify metadata as time-synchronized, ordered experimental coordinates, or deliberate file-order-only exploratory data. For STOE WinXPOW `RAW_1.06Powdat`, convert with `convert_stoe_raw.py` first and keep `stoe_conversion_audit.json`; never treat a proprietary binary file as an integrated text pattern without validated conversion.
+2. When diffraction and electrochemical metadata are separate, build the manifest with `build_sequential_manifest.py`. Use exact ID/order matching when possible; otherwise require an explicit maximum time delta. Never interpolate missing metadata.
+3. Run `run_sequential_refinement.py --plan-only`. Declare whether the instrument profile is calibrated. Production sequences keep the supplied profile locked.
+4. Refine start, middle, end, requested, and every phase-set-boundary anchor. Endpoint failure blocks propagation. Accepted internal anchors become real checkpoints; a rejected internal anchor remains diagnostic and is not used as a seed.
+5. Partition both directions into checkpoint segments. Continue independent segments after a local GSAS-II exception, preserving failed segments as partial evidence rather than discarding the entire run.
+6. Use one recorded global reference cell in both directions. Convert each checkpoint anchor's cell to an equivalent initial HAP `Dij/HStrain` offset, keep global `Cell` fixed, and never erase a real checkpoint lattice state by copying only the global cell.
+7. Run deterministic stages: stable background/scale/Dij first; optional sample displacement second; constrained phase fractions and justified size/microstrain third; optional atomic X/U terms last. Repeat a stage at most the declared number of passes while final-cycle shift/esd remains above 1.
+8. Treat phase fractions as constrained quantities. Phase-set changes create checkpoint boundaries; a segment that crosses a phase-set change cannot refine one common fraction constraint. Atomic X/U refinement requires an explicit justification plus pre-atomic Nobs/Nvars and correlation gates.
+9. Require every requested stage to contain its expected variable family and all frames. Missing frames, nonconvergence, SVD failure, frozen variables, or a major persistent positive residual are hard failures.
+10. Read `sequential_audit.json`. Direction sensitivity, high correlation, final-cycle shift/esd above 1, missing formal fraction ESDs, and robust trajectory discontinuities remain `review`. Total-run `Max shft/sig` is provenance, not a substitute for the final-cycle value.
+11. Compare plausible declared models with `select_sequential_candidate.py`; it rejects `fail`, prefers `pass` over `review`, then minimizes review burden and forward/reverse sensitivity above the predeclared tolerance. Direction deltas within tolerance are treated as equivalent before considering median Rwp.
+12. Keep the exact manifest, synchronization audit, instrument file, CIFs, patterns, input hashes, checkpoint segments, both directions, per-stage snapshots, CSV/JSON results, audit, report, and validation. Do not generate a figure.
 
 ## Stop rules
 

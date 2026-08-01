@@ -1,11 +1,19 @@
 ---
 name: rietveld-plotting
-description: Create, restyle, and verify publication-ready Rietveld refinement figures from final GSAS-II `.gpx` projects without changing refinement parameters. Use when the user asks to plot Rietveld results, draw observed/calculated/difference curves, add Bragg ticks or HKL labels, re-export a GSAS-II fit figure, change the 2theta range or panel label, or prepare a PNG figure from an already selected refinement. Do not use this skill to refine XRD data, select structural models, lower Rwp, or modify a `.gpx`; use `gsas-ii-rietveld-refinement` for those tasks.
+description: Create, restyle, and verify publication-ready single-pattern, temperature-series, or operando XRD figures without changing refinement parameters. Use for observed/calculated/difference curves, Bragg ticks, accepted GSAS-II `.gpx` plots, audited temperature/time/frame series, experimental operando XRD plus synchronized electrochemistry, sequential contour maps, and refined lattice-parameter trajectories from accepted sequential-result exports. Do not use this skill to refine XRD data, select structural models, lower Rwp, or modify a `.gpx`; use `gsas-ii-rietveld-refinement` for those tasks.
 ---
 
 # Rietveld Plotting
 
-Create figures only from a final, defensible GSAS-II `.gpx`. Keep plotting downstream from refinement and never alter structural, profile, background, or instrument parameters.
+Create Rietveld figures only from a final, defensible GSAS-II `.gpx`, or from a hash-verified sequential result plus its audit and recorded source patterns. A separate experimental-operando route may display hash-verified converted patterns with synchronized electrochemistry, but it must state on the image and in its manifest that no per-frame Rietveld refinement is claimed. Keep plotting downstream from refinement and never alter structural, profile, background, or instrument parameters.
+
+## Route before plotting
+
+- One accepted powder histogram in a final GPX: use the locked single-pattern route below.
+- A high- or low-temperature series with `sequential_results_<direction>.json`, `sequential_audit.json`, varying temperature metadata, final GPX hashes, and source-pattern hashes: use the temperature-series route.
+- Constant-temperature operando frames varying with a provenance-backed time, voltage, capacity, scan, or frame coordinate: use the operando route. Do not relabel frame order as time or voltage.
+- Converted raw operando patterns with a conversion audit, synchronized manifest, and synchronization audit: use the experimental-operando route. It may show experimental intensity and electrochemistry only; never add refined cells, Bragg ticks, R factors, or a Rietveld claim.
+- Raw temperature patterns without accepted sequential results or a supported experimental-operando audit bundle: stop. They may be drawn as raw XRD data by a general scientific plotting workflow, but not presented as refined trajectories.
 
 ## Locked default contract
 
@@ -29,7 +37,31 @@ Treat every item in this section as a locked default. Do not silently substitute
 
 ## Required reference
 
-Read `references/plotting-policy.md` before generating or revising a figure.
+Read `references/plotting-policy.md` before generating or revising a single-pattern figure. Read `references/temperature-series-policy.md` for temperature or operando sequential figures.
+
+## High-/low-temperature sequential route
+
+Use `scripts/make_temperature_series_plot.py`; do not reconstruct the sequence with an ad hoc notebook. The script reads observed profiles from the hash-verified recorded input patterns and refined cells/formal ESDs from one selected direction's GSAS-II JSON export. It verifies every recorded pattern and final GPX hash before and after plotting and never imports or saves GSAS-II.
+
+Default outputs are a temperature-coloured stacked pattern, a sequential-intensity contour map, a refined cell-parameter panel, and one machine-readable plot manifest. Export PNG at 600 dpi plus editable SVG. Use the common 2theta intersection rather than forcing the single-pattern `10-60°` window. Use global intensity normalization by default because it preserves between-frame scale; allow per-frame normalization only as an explicitly disclosed display transformation. Never smooth profiles or refined trajectories.
+
+For multiphase results, require `--phase` instead of guessing which phase the user means. `pass` and `review` audits may be drawn, but report `review` as scientifically unresolved. Stop on `fail` unless the user explicitly requests a diagnostic; a failed diagnostic must retain the permanent `DIAGNOSTIC ONLY — SEQUENTIAL AUDIT FAIL` label.
+
+When selected-temperature Rietveld fits are also requested, choose defensible frames (normally endpoints, midpoint, and transition boundaries) from the accepted sequence and render each with the existing `make_rietveld_plot.py`. Do not select only the lowest-Rwp frames or borrow Bragg assignments from a paper.
+
+## Constant-temperature battery operando route
+
+Use the same deterministic script with `--series-key`. Prefer a synchronized physical coordinate such as `time_min`, `voltage_V`, or capacity only when that field is present in every frame's audited metadata. When timestamps or synchronization provenance are absent, use `source_frame` or `order`, label the axis `Frame`, and state that voltage/time alignment is unavailable. The contour map and numerical trajectories retain every frame. A publication stack may use declared uniform representative sampling when all source frames remain hash-verified and the plot manifest records the selected frame indices; never imply that a representative stack contains every frame.
+
+## Experimental-operando route without accepted sequential refinement
+
+Use `scripts/make_operando_xrd_plot.py` only when all three inputs are present: a strict STOE conversion audit, a synchronized manifest CSV, and the hash-bound one-to-one nearest-time synchronization audit created with the current `build_sequential_manifest.py`. The script verifies every recorded converted-pattern hash and, by default, every original RAW source hash before and after plotting. It rejects incomplete synchronization, reused metadata rows, a stale or foreign manifest audit, interpolation, altered files, smoothing, background-subtracted conversion, path disagreements, and non-monotonic acquisition time.
+
+The output contains either the experimental XRD heatmap or a full-pattern stack, together with the complete synchronized voltage trajectory. It carries a permanent note that it is not per-frame Rietveld refinement and records `per_frame_rietveld_claimed=false` in the plot manifest. The heatmap defaults to a disclosed `log1p` display transform with no smoothing or background subtraction. Use `--view stacked --intensity-mode per-frame` when the user prioritizes seeing weak reflections; the manifest must state that this display normalization does not preserve between-frame intensity scale. For a paper-like representative stack, use an explicit `--frame-step`, declare retained frame IDs, and use `--x-windows '6,8.5;14,21'` only for honest broken-axis peak windows. `--allow-profile-overlap` may enlarge peaks across adjacent offset baselines only when the user explicitly requests peak emphasis; disclose it as display scaling and keep all text and legends outside the plotted profiles. When the user explicitly asks to lift weak peaks, `--peak-gamma` may be set below 1; record the exponent, state that it is nonlinear display-only intensity scaling, retain one common transform across all windows, and never describe the transformed height as quantitative intensity. Keep the full electrochemical trace, use a `0.5 V` major interval unless the user specifies otherwise, and place its legend outside the data axes.
+
+For an explicitly requested promotional operando figure, `--promotional-layout` may use a shorter title, put panel letters above the data boxes, retain the legend in a dedicated blank column, and wrap the scientific disclosure into two centered lines below the axes. In a heatmap, it must also allocate a dedicated colorbar row so the colorbar title and tick labels cannot collide with the figure title or heatmap. This option changes spacing only: it must not remove the no-per-frame-Rietveld statement, source verification, selected-frame disclosure, or nonlinear-display exponent.
+
+When the user explicitly requests a figure with no visible annotations beyond axes, colorbar, and legend, add `--clean-figure` together with `--promotional-layout`. Omit the visible title, panel letters, and footer, but retain every disclosure and source-integrity result in the plot manifest. State on handoff that an external caption must identify the experimental display transform and that the figure is not per-frame Rietveld refinement.
 
 ## Workflow
 
@@ -66,9 +98,39 @@ Read `references/plotting-policy.md` before generating or revising a figure.
 
 Optional controls include `--histogram-index`, `--panel`, `--show-y-values`, `--show-hkl-labels`, `--hide-fit-statistics`, `--include-background`, `--figure-width`, `--figure-height`, `--max-labels`, `--label-separation`, `--marker-step`, `--stem`, and `--formats`.
 
+Temperature-series command:
+
+```bash
+python "${CODEX_HOME:-$HOME/.codex}/skills/rietveld-plotting/scripts/make_temperature_series_plot.py" \
+  --results /abs/path/results/sequential_results_forward.json \
+  --audit /abs/path/results/sequential_audit.json \
+  --phase PhaseName \
+  --out-dir "${RIETVELD_PLOT_OUTPUT:-$HOME/Rietveld_plot_results}/SeriesName" \
+  --sample-id SeriesName
+```
+
+Temperature controls include `--temperature-key`, `--cell-parameters`, `--x-min`, `--x-max`, `--intensity-mode`, `--stack-offset`, `--contour-vmax-percentile`, and `--formats`. Use `--allow-failed-audit-for-diagnostic` only for explicitly requested troubleshooting.
+
+For a constant-temperature operando series, replace `--temperature-key` with `--series-key source_frame` (or a provenance-backed physical coordinate) and optionally set `--series-label` and `--series-unit`. Use `--stack-max-labels` to limit annotations without dropping curves.
+
+Experimental-operando command:
+
+```bash
+python "${CODEX_HOME:-$HOME/.codex}/skills/rietveld-plotting/scripts/make_operando_xrd_plot.py" \
+  --manifest /abs/path/manifest.csv \
+  --conversion-audit /abs/path/stoe_conversion_audit.json \
+  --sync-audit /abs/path/manifest.csv.sync.json \
+  --sample-id PublicOperandoSeries \
+  --out-dir "${RIETVELD_PLOT_OUTPUT:-$HOME/Rietveld_plot_results}/PublicOperandoSeries"
+```
+
+Add `--view stacked --intensity-mode per-frame` for a full-pattern stack. The default `--frame-step 1` draws every frame; any larger step is a disclosed representative display and does not change source verification. `--x-windows` creates a broken-axis display only and never alters source patterns.
+
 ## Stop rules
 
 - Stop if the GPX lacks calculated profile data, a difference curve, or reflection lists required by the requested figure.
+- Stop if sequential results lack a varying numeric series coordinate, a scientific audit, formal source hashes, or refined cell data for the requested phase.
+- Stop if an experimental-operando request lacks a complete conversion/synchronization audit bundle, or if it asks to present raw heatmaps as refined lattice trajectories.
 - Stop and route to `gsas-ii-rietveld-refinement` if the user asks to change the structure model, background, cell, zero, peak shape, R factors, occupancies, or any other refined parameter.
 - Do not invent, borrow, or manually shift Bragg/HKL assignments from a reference image.
 - Do not call a visually attractive figure evidence of a valid refinement; plotting does not replace residual or model audits.
@@ -76,6 +138,8 @@ Optional controls include `--histogram-index`, `--panel`, `--show-y-values`, `--
 ## Reporting requirements
 
 - State that plotting was read-only and did not refine or modify the GPX.
+- For a sequential series, report the selected direction, audit status, phase, coordinate provenance/range, frame count, intensity-display mode, contour clipping percentile, and unchanged source-hash status.
+- For an experimental-operando series, report that no per-frame Rietveld refinement is claimed, plus frame count, synchronized time/voltage ranges, maximum synchronization error, intensity transform, and unchanged source-hash status.
 - Link the source GPX and final image.
 - State the histogram, phase names, 2theta range, and output format.
 - State whether Bragg positions and HKL labels were read directly from the GSAS-II reflection list.

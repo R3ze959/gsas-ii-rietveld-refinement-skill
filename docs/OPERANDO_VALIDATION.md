@@ -50,8 +50,12 @@ The exercise was run as a two-phase sequence with:
 - constrained two-phase fractions;
 - phase-specific size and microstrain models;
 - no atomic-coordinate or displacement-parameter refinement;
-- forward warm start from the first anchor and reverse warm start from the last
-  anchor.
+- forward and reverse checkpoint segments seeded from accepted start, middle,
+  and end anchors;
+- one common global reference cell with checkpoint-cell states converted to
+  HAP HStrain offsets;
+- at most three repeats of each unchanged sequential stage while the maximum
+  final-cycle shift/esd remained above 1.
 
 Both directions used the same fixed stage order:
 
@@ -61,67 +65,83 @@ Both directions used the same fixed stage order:
 
 ## Results
 
-Two independent full runs completed all 17 frames in both directions. Every
-stage reported all expected histograms and no stage-level failure.
+The robust checkpoint regression completed all 17 frames in both directions.
+Every segment and requested stage reported all expected histograms and no
+stage-level exception, nonconvergence flag, SVD failure, or missing variable
+family.
 
 | Check | Result |
 |---|---:|
 | Forward completed frames | 17/17 |
 | Reverse completed frames | 17/17 |
-| Forward Rwp range | 13.8569-17.3931% |
-| Forward mean Rwp | 15.6556% |
-| Reverse Rwp range | 14.9959-17.4845% |
-| Reverse mean Rwp | 16.0799% |
-| Forward phase-fraction sum | 1.000000 within floating-point precision |
-| Reverse phase-fraction sum | 1.000000 within floating-point precision |
-| Input-bundle entries | 21 |
-| Source/staged SHA-256 comparisons | 42/42 matched |
+| Forward Rwp range | 13.8773-17.5923% |
+| Forward mean / median Rwp | 15.6346% / 15.9697% |
+| Reverse Rwp range | 13.8805-17.3661% |
+| Reverse mean / median Rwp | 15.6302% / 15.9637% |
+| Direction Rwp delta, median / maximum | 0.00729 / 0.40606 percentage point |
+| Forward final-cycle shift/esd, median / maximum | 3.462 / 23.412 |
+| Reverse final-cycle shift/esd, median / maximum | 4.518 / 13.942 |
+| Maximum exported correlation | 88.26% |
+| Phase-fraction sum | 1.000000 within floating-point precision |
 | Generated figures | 0 |
 
-For the two independent runs, the maximum absolute difference was exactly zero
-for every exported:
+Relative to the same checkpoint implementation with only one pass per stage,
+the bounded repeated-stage version reduced the maximum forward/reverse Rwp
+difference from 1.335 to 0.406 percentage point. It also reduced the maximum
+forward Rwp from 19.427% to 17.592% and the maximum reverse Rwp from 18.092% to
+17.366%. The median direction difference was already small and changed from
+0.00932 to 0.00729 percentage point.
 
-- Rwp and GOF value;
-- phase mass fraction;
-- lattice parameter and angle;
-- unit-cell volume.
+Repeated passes were bounded at three because the maximum shift/esd did not
+decrease monotonically for every segment. This limit improves ordinary
+stage-wise convergence without allowing an unstable model to iterate
+indefinitely.
 
 GPX byte hashes are not used as the reproducibility criterion because GSAS-II
 projects may contain internal identifiers and other serialization details.
-Reproducibility is evaluated from the scientific numeric outputs.
+Scientific comparisons use the machine-readable per-frame outputs.
 
 ## Audit interpretation
 
-The final audit status is `review`, not `pass`.
+The final audit status is `fail`, despite full software completion.
 
-There were no hard failures: no missing frame, failed GSAS-II convergence flag,
-SVD failure, frozen variable, missing required result, or phase-fraction
-normalization error. However, the audit retained review flags for all 17 frames
-because:
+No frame was missing and no final stage reported a GSAS-II nonconvergence flag,
+SVD failure, frozen variable, missing requested variable family, or
+phase-fraction normalization error. The hard failure instead comes from a
+persistent positive residual near 9.3 degrees in 11 frames. In both directions
+that residual reaches 12.7-19.6% of the observed pattern maximum for most
+flagged frames and 13.3% in the last frame. It exceeds the declared 10% hard
+model-residual threshold.
 
-- final sequential maximum shift/esd values remained large
-  (forward maximum 41.68; reverse maximum 28.34);
-- forward and reverse warm starts produced scientifically relevant path
-  dependence in some cells and Rwp values;
-- some anchor and stage models showed strong parameter correlations, including
-  correlations above 95%.
+The audit also retains review information:
 
-These findings are intentionally not hidden or smoothed. They demonstrate that
-the driver can complete and reproduce the official sequence while still
-refusing to equate numerical completion or lower Rwp with an unambiguous
-physical model.
+- some final-cycle shift/esd values remain above 1 after the three-pass bound;
+- the largest forward/reverse relative cell difference is 0.00318 for the
+  minor CuO phase, above the declared tolerance;
+- formal mass-fraction ESDs are unavailable for 16 of 17 frames in each
+  direction under the present sequential wildcard constraint handling.
+
+The normalized phase fractions remain useful screening values, but they are
+not fully uncertainty-qualified quantitative fractions. These limitations are
+reported rather than hidden or smoothed. A lower Rwp or completed GSAS-II run
+does not overrule a systematic missing peak.
 
 ## Acceptance boundary
 
 Validated:
 
 - real `GSASIIscriptable` execution;
-- ordered manifest handling;
-- representative anchors and endpoint gates;
+- strict pattern/manifest handling and metadata-provenance classification;
+- representative anchors, endpoint gates, and real internal checkpoints;
+- bounded exact/nearest-time metadata joining without interpolation;
 - forward and reverse sequential refinement;
+- local segment failure isolation and partial-result preservation;
+- common-cell/checkpoint-HStrain conversion;
 - multiphase fraction normalization;
 - covariance-backed cell and uncertainty export;
-- deterministic numeric reruns;
+- bounded repeated-stage convergence;
+- robust persistent-residual gating;
+- conservative multi-candidate selection policy;
 - transactional input staging with SHA-256 verification;
 - machine-verifiable audit/report linkage;
 - no-figure boundary.
@@ -131,7 +151,8 @@ Still requires system-specific validation before scientific use:
 - the user's beamline or laboratory instrument calibration;
 - detector-image integration and vendor-format conversion;
 - automatic discovery of unknown phases;
-- phase appearance/disappearance across changing phase sets;
-- electrochemical time alignment for true operando cells;
+- phase appearance/disappearance beyond declared phase-set checkpoints;
+- uncertainty-qualified phase fractions for every sequential frame;
+- electrochemical interpretation after time alignment;
 - chemically justified atomic-coordinate, occupancy, or displacement-parameter
   refinement.

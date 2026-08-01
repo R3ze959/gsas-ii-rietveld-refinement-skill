@@ -19,3 +19,4 @@ venv/
 GSAS-II_refinement_results/
 GSAS-II_refinement_staging/
 .external-data/
+dist/

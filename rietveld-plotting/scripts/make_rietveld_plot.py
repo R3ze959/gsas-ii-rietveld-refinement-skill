@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -42,6 +43,14 @@ FIT_STATISTICS_EQUALS_X = 0.895
 FIT_STATISTICS_VALUE_X = 0.915
 FIT_STATISTICS_TOP_Y = 0.735
 FIT_STATISTICS_ROW_STEP = 0.044
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_gsasii(gsasii_dir: Path):
@@ -548,6 +557,7 @@ def main() -> int:
     gpx_path = Path(args.gpx).expanduser().resolve()
     if not gpx_path.is_file():
         raise SystemExit(f"GPX file not found: {gpx_path}")
+    gpx_hash_before = sha256_file(gpx_path)
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -588,6 +598,9 @@ def main() -> int:
     )
     image_outputs = save_formats(fig, out_dir, stem, formats)
     plt.close(fig)
+    gpx_hash_after = sha256_file(gpx_path)
+    if gpx_hash_after != gpx_hash_before:
+        raise SystemExit("Input integrity failure: GPX changed during read-only plotting")
 
     result = {
         "style_profile": STYLE_PROFILE,
@@ -596,6 +609,8 @@ def main() -> int:
     if args.write_plot_manifest:
         manifest = {
             "gpx": str(gpx_path),
+            "gpx_sha256": gpx_hash_before,
+            "gpx_hash_unchanged": True,
             "histogram": hist.name,
             "sample_id": sample_id,
             "style_profile": STYLE_PROFILE,
@@ -640,6 +655,7 @@ def main() -> int:
                 }
                 for row in labels
             ],
+            "integrity": "GPX SHA-256 identical before and after plotting",
         }
         manifest_path = out_dir / f"{stem}_plot_manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

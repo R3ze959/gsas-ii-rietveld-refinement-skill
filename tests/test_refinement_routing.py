@@ -18,7 +18,14 @@ from refinement_core import classify_refinement_request  # noqa: E402
 
 def make_pattern(root: Path, name: str) -> Path:
     path = root / name
-    path.write_text("10.0 100\n10.1 110\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(
+            f"{10 + index * 0.1:.3f} {100 + index}"
+            for index in range(20)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return path
 
 
