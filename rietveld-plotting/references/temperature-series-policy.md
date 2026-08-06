@@ -19,11 +19,12 @@
 
 ## Figure set
 
-Generate three complementary views rather than forcing all information into one crowded panel:
+Generate complementary views rather than forcing all information into one crowded panel:
 
 1. **Sequentially stacked observed patterns** — all frames in acquisition order and unsmoothed. Temperature uses the restrained blue-neutral-red scale; generic operando order uses a perceptually ordered sequential palette.
 2. **Series-coordinate contour map** — the same observed arrays linearly resampled onto a common 2theta grid for display only. Use the physical coordinate only when it is strictly monotonic; otherwise use frame order so heating/cooling or cycling history is not silently reordered.
-3. **Refined cell trajectories** — symmetry-independent cell parameters plus volume for one explicitly selected phase, with formal GSAS-II ESD error bars wherever present and the same audited series coordinate on the x axis.
+3. **Refined cell trajectories** — symmetry-independent cell parameters plus volume for each explicitly selected phase, with formal GSAS-II ESD error bars wherever present and the same audited series coordinate on the x axis. Use a separate figure per phase.
+4. **Phase-fraction trajectories** — when at least two covariance-backed phase mass-fraction series are exported, show all of them together in wt% with formal ESD bars. Use the honest 0–100% scale by default; do not silently zoom a trace phase.
 
 When requested, add representative Rietveld fits separately with `make_rietveld_plot.py`. Select endpoints, a midpoint, and justified transition-boundary frames; do not cherry-pick only low-Rwp frames.
 
@@ -55,7 +56,11 @@ When requested, add representative Rietveld fits separately with `make_rietveld_
 
 ## Multiphase and uncertainty rules
 
-- If more than one refined phase is common to the series, require an explicit phase name. Do not choose the major phase silently.
+- If more than one phase appears anywhere in the series, require an explicit phase name, comma-separated list, or `all`. Do not choose the major phase silently.
+- Treat the frame's declared `phase_set` as the activity gate. An absent phase is a missing value and must break the cell/fraction curve; it is not zero and must never be interpolated across.
+- Read phase fractions only from covariance-backed `mass_fractions` in the accepted sequential export. Do not derive them from displayed peak height, GPX scale factors in the plotting skill, or renormalized visible phases.
+- Require finite fractions within 0–1 and non-negative formal ESDs. If an active phase lacks a fraction, stop rather than drawing an incomplete quantitative panel.
+- Draw dashed phase-set boundaries only when adjacent frames explicitly declare different nonempty phase sets. Do not infer phase appearance or disappearance from noise in a plotted trajectory.
 - Plot formal ESDs from the selected direction exactly as exported. Do not substitute forward/reverse path spread for a formal ESD.
 - Forward and reverse refinement directions are algorithmic sensitivity tests, not experimental heating and cooling branches. Never label them as heating/cooling.
 - A heating/cooling label may be used only when the experimental manifest explicitly contains branch provenance.
@@ -72,5 +77,7 @@ The layout is informed by recurring conventions in published variable-temperatur
 - Every stacked frame is present and unsmoothed, or an explicit representative step and exact selected frame list are recorded without weakening full-source verification.
 - Contour vertical-axis choice preserves acquisition history; interpolation and percentile clipping are disclosed.
 - Cell panels show only parameters actually exported for the selected phase and retain formal ESDs.
+- Multiphase cell/fraction curves have visible gaps at absent frames, contain no interpolation across phase absence, and record exact absent frame IDs in the manifest.
+- A phase-fraction panel uses covariance-backed sources, wt%, formal ESDs, an unzoomed 0–100% default scale, and declared phase-set boundaries only.
 - PNG and SVG are readable at publication size with no clipping, accidental grids, rainbow palette, or hidden diagnostic-fail status.
 - Experimental-operando figures retain the no-per-frame-Rietveld label and record complete synchronization and hash provenance in the plot manifest.

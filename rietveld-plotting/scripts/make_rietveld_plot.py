@@ -9,6 +9,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -267,7 +268,8 @@ def prepare_plot_data(
     x_max: float,
     marker_step: int,
     subtract_background: bool,
-) -> dict[str, np.ndarray]:
+    bragg_layout: str = "auto",
+) -> dict[str, Any]:
     x = profile["TwoTheta"]
     visible = (x >= x_min) & (x <= x_max)
     if not np.any(visible):
@@ -291,27 +293,71 @@ def prepare_plot_data(
     sampled_mask = visible & ((np.arange(x.size) % step) == 0)
     experimental_markers[sampled_mask] = display_observed[sampled_mask]
 
-    difference_offset = y_min - 0.24 * span
-    tick_base = y_min - 0.14 * span
-    tick_top = y_min - 0.09 * span
+    phase_names = list(dict.fromkeys(str(row["phase"]) for row in reflections))
+    if bragg_layout not in {"auto", "combined", "separate"}:
+        raise SystemExit(f"Unsupported Bragg layout: {bragg_layout}")
+    resolved_layout = (
+        "separate" if bragg_layout == "auto" and len(phase_names) > 1 else bragg_layout
+    )
+    if resolved_layout == "auto":
+        resolved_layout = "combined"
 
-    bragg_positions = np.asarray(sorted({round(float(row["two_theta"]), 5) for row in reflections}), dtype=float)
+    bragg_rows: list[dict[str, Any]] = []
+    if resolved_layout == "combined":
+        positions = np.asarray(
+            sorted({round(float(row["two_theta"]), 5) for row in reflections}),
+            dtype=float,
+        )
+        bragg_rows.append(
+            {
+                "phase": phase_names[0] if len(phase_names) == 1 else None,
+                "positions": positions,
+                "y0": np.full_like(positions, y_min - 0.14 * span),
+                "y1": np.full_like(positions, y_min - 0.09 * span),
+            }
+        )
+        difference_offset = y_min - 0.24 * span
+    else:
+        tick_height = 0.025 * span
+        row_step = 0.045 * span
+        first_top = y_min - 0.070 * span
+        for row_index, phase_name in enumerate(phase_names):
+            positions = np.asarray(
+                sorted(
+                    {
+                        round(float(row["two_theta"]), 5)
+                        for row in reflections
+                        if str(row["phase"]) == phase_name
+                    }
+                ),
+                dtype=float,
+            )
+            tick_top = first_top - row_index * row_step
+            bragg_rows.append(
+                {
+                    "phase": phase_name,
+                    "positions": positions,
+                    "y0": np.full_like(positions, tick_top - tick_height),
+                    "y1": np.full_like(positions, tick_top),
+                }
+            )
+        difference_offset = y_min - (0.17 + len(bragg_rows) * 0.045) * span
     return {
         **profile,
         "DisplayObserved": display_observed,
         "DisplayCalculated": display_calculated,
         "ExperimentalMarkers": experimental_markers,
         "DifferenceOffset": profile["Difference"] + difference_offset,
-        "BraggTwoTheta": bragg_positions,
-        "BraggY0": np.full_like(bragg_positions, tick_base),
-        "BraggY1": np.full_like(bragg_positions, tick_top),
+        "BraggRows": bragg_rows,
+        "BraggLayout": resolved_layout,
+        "BraggPhaseNames": phase_names,
         "YMin": np.asarray([difference_offset - 0.09 * span]),
         "YMax": np.asarray([y_max + 0.24 * span]),
     }
 
 
 def plot_rietveld(
-    plot_data: dict[str, np.ndarray],
+    plot_data: dict[str, Any],
     labels: list[dict[str, object]],
     statistics: dict[str, float | None],
     x_min: float,
@@ -361,15 +407,39 @@ def plot_rietveld(
         label="Difference",
         zorder=2,
     )
-    ax.vlines(
-        plot_data["BraggTwoTheta"],
-        plot_data["BraggY0"],
-        plot_data["BraggY1"],
-        color=BRAGG_COLOR,
-        lw=BRAGG_LINE_WIDTH,
-        label="Bragg position",
-        zorder=1,
-    )
+    bragg_rows = plot_data["BraggRows"]
+    for row_index, row in enumerate(bragg_rows):
+        ax.vlines(
+            row["positions"],
+            row["y0"],
+            row["y1"],
+            color=BRAGG_COLOR,
+            lw=BRAGG_LINE_WIDTH,
+            label="Bragg position" if row_index == 0 else None,
+            zorder=1,
+        )
+    if plot_data["BraggLayout"] == "separate":
+        phase_label_x = x_min + 0.012 * (x_max - x_min)
+        for row in bragg_rows:
+            phase_name = str(row["phase"])
+            label_y = 0.5 * (float(row["y0"][0]) + float(row["y1"][0]))
+            ax.text(
+                phase_label_x,
+                label_y,
+                phase_name,
+                ha="left",
+                va="center",
+                fontsize=5.0,
+                color=BRAGG_COLOR,
+                bbox={
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "pad": 0.18,
+                    "alpha": 0.88,
+                },
+                clip_on=True,
+                zorder=4,
+            )
 
     if show_hkl_labels:
         for item in label_positions(plot_data, labels, x_min, x_max):
@@ -389,7 +459,11 @@ def plot_rietveld(
             ax.text(
                 text_x,
                 text_y,
-                str(item["label"]),
+                (
+                    f"{item['phase']} {item['label']}"
+                    if len(plot_data["BraggPhaseNames"]) > 1
+                    else str(item["label"])
+                ),
                 rotation=90,
                 ha="center",
                 va="bottom",
@@ -522,6 +596,15 @@ def parse_args() -> argparse.Namespace:
         help="Plot every Nth experimental marker; default 1 shows every measured point",
     )
     parser.add_argument(
+        "--bragg-layout",
+        choices=("auto", "separate", "combined"),
+        default="auto",
+        help=(
+            "auto separates Bragg ticks by phase for multiphase GPX files and "
+            "preserves one row for single-phase files"
+        ),
+    )
+    parser.add_argument(
         "--include-background",
         action="store_true",
         help="Display observed and calculated intensities with the fitted background included",
@@ -581,6 +664,7 @@ def main() -> int:
         args.x_max,
         args.marker_step,
         not args.include_background,
+        args.bragg_layout,
     )
 
     fig = plot_rietveld(
@@ -635,6 +719,14 @@ def main() -> int:
                 "bragg_positions": {
                     "color": BRAGG_COLOR,
                     "line_width_pt": BRAGG_LINE_WIDTH,
+                    "layout": plot_data["BraggLayout"],
+                    "phase_rows": [
+                        {
+                            "phase": row["phase"],
+                            "reflection_count": int(len(row["positions"])),
+                        }
+                        for row in plot_data["BraggRows"]
+                    ],
                 },
                 "fit_statistics": {
                     "font_size_pt": FIT_STATISTICS_FONT_SIZE,

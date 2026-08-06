@@ -1,6 +1,6 @@
 ---
 name: rietveld-plotting
-description: Create, restyle, and verify publication-ready single-pattern, temperature-series, or operando XRD figures without changing refinement parameters. Use for observed/calculated/difference curves, Bragg ticks, accepted GSAS-II `.gpx` plots, audited temperature/time/frame series, experimental operando XRD plus synchronized electrochemistry, sequential contour maps, and refined lattice-parameter trajectories from accepted sequential-result exports. Do not use this skill to refine XRD data, select structural models, lower Rwp, or modify a `.gpx`; use `gsas-ii-rietveld-refinement` for those tasks.
+description: Create, restyle, and verify publication-ready single- or multiphase Rietveld, temperature-series, or operando XRD figures without changing refinement parameters. Use for observed/calculated/difference curves, phase-separated Bragg rows, accepted GSAS-II `.gpx` plots, audited temperature/time/frame series, covariance-backed phase-fraction trajectories, experimental operando XRD plus synchronized electrochemistry, contour maps, and refined lattice-parameter trajectories from accepted sequential-result exports. Do not use this skill to refine XRD data, select structural models, lower Rwp, or modify a `.gpx`; use the appropriate refinement skill for those tasks.
 ---
 
 # Rietveld Plotting
@@ -29,6 +29,7 @@ Treat every item in this section as a locked default. Do not silently substitute
 - Draw the entire experimental profile with uniform `2.05 pt` hollow red circles at a default `--marker-step 1`, so every measured point is shown. Do not draw a red connecting line or vary marker size by peak height.
 - Use `--marker-step 2` or higher only when the user explicitly requests reduced marker density. Never smooth plotted experimental marker intensities, replace the raw GPX arrays, or use altered values for refinement statistics.
 - Draw the calculated profile as a continuous black `0.48 pt` line, the unchanged offset difference profile as a blue `0.50 pt` line (`#1f4ed8`), and GSAS-II reflection positions as green `0.45 pt` ticks (`#1b9e77`).
+- For one phase, retain the established single Bragg row. For two or more phases, `--bragg-layout auto` must create one labeled green Bragg row per phase and move the difference curve below all rows. Keep coincident reflections in their respective phase rows; never collapse them across phases. Use `--bragg-layout combined` only when the user explicitly requests a diagnostic combined row.
 - Show Rwp, Rp, and GOF from the GPX in the upper-right by default at `5.8 pt`. Render all three lines with one sans-serif math font and normal weight; use fixed label, equals-sign, and value columns so both the first letters and equals signs align vertically.
 - Hide HKL text labels by default; show them only when requested.
 - Hide y-axis numeric labels for relative-intensity figures unless absolute values matter.
@@ -43,9 +44,9 @@ Read `references/plotting-policy.md` before generating or revising a single-patt
 
 Use `scripts/make_temperature_series_plot.py`; do not reconstruct the sequence with an ad hoc notebook. The script reads observed profiles from the hash-verified recorded input patterns and refined cells/formal ESDs from one selected direction's GSAS-II JSON export. It verifies every recorded pattern and final GPX hash before and after plotting and never imports or saves GSAS-II.
 
-Default outputs are a temperature-coloured stacked pattern, a sequential-intensity contour map, a refined cell-parameter panel, and one machine-readable plot manifest. Export PNG at 600 dpi plus editable SVG. Use the common 2theta intersection rather than forcing the single-pattern `10-60°` window. Use global intensity normalization by default because it preserves between-frame scale; allow per-frame normalization only as an explicitly disclosed display transformation. Never smooth profiles or refined trajectories.
+Default outputs are a temperature-coloured stacked pattern, a sequential-intensity contour map, one refined cell-parameter figure per requested phase, an automatic phase-fraction figure when at least two covariance-backed mass-fraction series are available, and one machine-readable plot manifest. Export PNG at 600 dpi plus editable SVG. Use the common 2theta intersection rather than forcing the single-pattern `10-60°` window. Use global intensity normalization by default because it preserves between-frame scale; allow per-frame normalization only as an explicitly disclosed display transformation. Never smooth profiles or refined trajectories.
 
-For multiphase results, require `--phase` instead of guessing which phase the user means. `pass` and `review` audits may be drawn, but report `review` as scientifically unresolved. Stop on `fail` unless the user explicitly requests a diagnostic; a failed diagnostic must retain the permanent `DIAGNOSTIC ONLY — SEQUENTIAL AUDIT FAIL` label.
+For multiphase results, require `--phase` instead of guessing which phase the user means; accept one phase, a comma-separated phase list, or `--phase all`. Plot each selected phase's cell parameters separately. A phase that is absent from a frame must appear as a gap, never a zero or interpolated value. Phase fractions must come from the sequential export's covariance-backed `mass_fractions`, be shown in wt%, retain formal ESDs, and break across phase absence. Mark declared phase-set changes, and stop if an active phase lacks a fraction. `pass` and `review` audits may be drawn, but report `review` as scientifically unresolved. Stop on `fail` unless the user explicitly requests a diagnostic; a failed diagnostic must retain the permanent `DIAGNOSTIC ONLY — SEQUENTIAL AUDIT FAIL` label.
 
 When selected-temperature Rietveld fits are also requested, choose defensible frames (normally endpoints, midpoint, and transition boundaries) from the accepted sequence and render each with the existing `make_rietveld_plot.py`. Do not select only the lowest-Rwp frames or borrow Bragg assignments from a paper.
 
@@ -67,13 +68,13 @@ When the user explicitly requests a figure with no visible annotations beyond ax
 
 1. Confirm that the input is a final `.gpx`, not an unrefined or rejected candidate.
 2. Record the GPX SHA-256 hash before loading it.
-3. Load the project read-only and identify the requested powder histogram, phases, available 2theta range, calculated profile, fitted background, unchanged difference curve, fit statistics, and reflection lists.
+3. Load the project read-only and identify the requested powder histogram, ordered phase list, available 2theta range, calculated profile, fitted background, unchanged difference curve, fit statistics, and phase-specific reflection lists.
 4. Resolve only explicit user overrides. Otherwise invoke `scripts/make_rietveld_plot.py` with the locked defaults above.
 5. Record the GPX SHA-256 hash again after rendering. Stop and report an integrity failure if it differs.
 6. Inspect the generated image against the acceptance checklist below. Do not accept the image from command success alone.
 7. Regenerate only when a visible plotting defect is found. Do not respond to a fit defect by changing refinement parameters.
 8. Keep the accepted image and delete plotting-only drafts or debug manifests unless the user asks to preserve them.
-9. Report the source GPX, unchanged hash status, histogram, phase names, plotted range, output format, background-display mode, marker step, and whether Bragg/HKL positions came from the GSAS-II reflection list.
+9. Report the source GPX, unchanged hash status, histogram, phase names, Bragg-row layout, plotted range, output format, background-display mode, marker step, and whether Bragg/HKL positions came from the GSAS-II reflection list.
 
 ## Acceptance checklist
 
@@ -82,6 +83,7 @@ When the user explicitly requests a figure with no visible annotations beyond ax
 - Confirm the continuous calculated line is black and remains visible through the markers.
 - Confirm the difference line is blue (`#1f4ed8`), vertically offset, and still represents the unchanged `Observed - Calculated` array.
 - Confirm green Bragg ticks (`#1b9e77`) come directly from the selected GPX histogram reflection lists.
+- For multiphase GPX files, confirm one labeled row per phase, no cross-phase reflection collapse, and enough vertical clearance between the lowest Bragg row and the difference curve. For one phase, confirm the original single-row geometry remains unchanged.
 - Confirm `Rwp`, `Rp`, and `GOF` are read from the GPX, share one `5.8 pt` sans-serif style, and use three fixed columns with both the first letters and equals signs vertically aligned.
 - Confirm HKL text and y-axis numeric values remain hidden unless explicitly requested.
 - Confirm PNG is exported at `600 dpi` and the GPX hash is identical before and after plotting.
@@ -96,7 +98,7 @@ When the user explicitly requests a figure with no visible annotations beyond ax
   --x-min 10 --x-max 60
 ```
 
-Optional controls include `--histogram-index`, `--panel`, `--show-y-values`, `--show-hkl-labels`, `--hide-fit-statistics`, `--include-background`, `--figure-width`, `--figure-height`, `--max-labels`, `--label-separation`, `--marker-step`, `--stem`, and `--formats`.
+Optional controls include `--histogram-index`, `--panel`, `--show-y-values`, `--show-hkl-labels`, `--hide-fit-statistics`, `--include-background`, `--figure-width`, `--figure-height`, `--max-labels`, `--label-separation`, `--marker-step`, `--bragg-layout`, `--stem`, and `--formats`.
 
 Temperature-series command:
 
@@ -104,12 +106,13 @@ Temperature-series command:
 python "${CODEX_HOME:-$HOME/.codex}/skills/rietveld-plotting/scripts/make_temperature_series_plot.py" \
   --results /abs/path/results/sequential_results_forward.json \
   --audit /abs/path/results/sequential_audit.json \
-  --phase PhaseName \
+  --phase all \
+  --phase-fractions auto \
   --out-dir "${RIETVELD_PLOT_OUTPUT:-$HOME/Rietveld_plot_results}/SeriesName" \
   --sample-id SeriesName
 ```
 
-Temperature controls include `--temperature-key`, `--cell-parameters`, `--x-min`, `--x-max`, `--intensity-mode`, `--stack-offset`, `--contour-vmax-percentile`, and `--formats`. Use `--allow-failed-audit-for-diagnostic` only for explicitly requested troubleshooting.
+Temperature controls include `--temperature-key`, `--phase` (one name, comma-separated names, or `all`), `--phase-fractions auto|require|hide`, `--cell-parameters`, `--x-min`, `--x-max`, `--intensity-mode`, `--stack-offset`, `--contour-vmax-percentile`, and `--formats`. Use `--phase-fractions require` when a multiphase quantitative panel is mandatory; use `hide` only when explicitly requested. Use `--allow-failed-audit-for-diagnostic` only for explicitly requested troubleshooting.
 
 For a constant-temperature operando series, replace `--temperature-key` with `--series-key source_frame` (or a provenance-backed physical coordinate) and optionally set `--series-label` and `--series-unit`. Use `--stack-max-labels` to limit annotations without dropping curves.
 
@@ -130,6 +133,7 @@ Add `--view stacked --intensity-mode per-frame` for a full-pattern stack. The de
 
 - Stop if the GPX lacks calculated profile data, a difference curve, or reflection lists required by the requested figure.
 - Stop if sequential results lack a varying numeric series coordinate, a scientific audit, formal source hashes, or refined cell data for the requested phase.
+- Stop if a requested phase is never present, an active phase lacks requested cell values, an active phase lacks an exported mass fraction when fractions are required, or any fraction/ESD is nonphysical.
 - Stop if an experimental-operando request lacks a complete conversion/synchronization audit bundle, or if it asks to present raw heatmaps as refined lattice trajectories.
 - Stop and route to `gsas-ii-rietveld-refinement` if the user asks to change the structure model, background, cell, zero, peak shape, R factors, occupancies, or any other refined parameter.
 - Do not invent, borrow, or manually shift Bragg/HKL assignments from a reference image.
@@ -138,10 +142,10 @@ Add `--view stacked --intensity-mode per-frame` for a full-pattern stack. The de
 ## Reporting requirements
 
 - State that plotting was read-only and did not refine or modify the GPX.
-- For a sequential series, report the selected direction, audit status, phase, coordinate provenance/range, frame count, intensity-display mode, contour clipping percentile, and unchanged source-hash status.
+- For a sequential series, report the selected direction, audit status, selected phases, phase-absence gaps, whether covariance-backed phase fractions were shown, fraction source/ESDs, coordinate provenance/range, frame count, intensity-display mode, contour clipping percentile, and unchanged source-hash status.
 - For an experimental-operando series, report that no per-frame Rietveld refinement is claimed, plus frame count, synchronized time/voltage ranges, maximum synchronization error, intensity transform, and unchanged source-hash status.
 - Link the source GPX and final image.
 - State the histogram, phase names, 2theta range, and output format.
-- State whether Bragg positions and HKL labels were read directly from the GSAS-II reflection list.
+- State whether Bragg positions and HKL labels were read directly from the GSAS-II reflection list and whether multiphase rows were separate or combined.
 - State whether the displayed observed/calculated profiles include or subtract the fitted background, and disclose any display-only smoothing.
 - Note any visible unresolved fit defects without attempting to reinterpret or repair them in this skill.

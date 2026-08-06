@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import math
 from pathlib import Path
 
 
@@ -18,7 +19,13 @@ SCRIPT = (
 )
 sys.path.insert(0, str(SCRIPT.parent))
 
-from make_temperature_series_plot import read_pattern, validate_audit  # noqa: E402
+from make_temperature_series_plot import (  # noqa: E402
+    collect_phase_fraction_series,
+    read_pattern,
+    select_cell_parameters,
+    select_phases,
+    validate_audit,
+)
 
 
 def sha256(path: Path) -> str:
@@ -208,6 +215,106 @@ class TemperaturePlottingTests(unittest.TestCase):
         self.assertEqual("source_frame", manifest["series_coordinate"]["metadata_key"])
         self.assertEqual("Frame", manifest["series_coordinate"]["label"])
         self.assertNotIn("temperature", manifest)
+
+    def test_multiphase_end_to_end_writes_per_phase_cells_and_fraction_plot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            results_path, audit_path = create_fixture(root)
+            results = json.loads(results_path.read_text(encoding="utf-8"))
+            for index, frame in enumerate(results["frames"]):
+                second_cell = json.loads(json.dumps(frame["cells"]["PhaseA"]))
+                second_cell["a"]["value"] = 3.0 + index * 0.005
+                second_cell["c"]["value"] = 6.0 + index * 0.01
+                frame["cells"]["PhaseB"] = second_cell
+                frame["phase_set"] = ["PhaseA", "PhaseB"]
+                frame["mass_fractions"] = {
+                    "PhaseA": {
+                        "value": 0.70 - index * 0.05,
+                        "esd": 0.005,
+                        "source": "depParmDict.WgtFrac",
+                    },
+                    "PhaseB": {
+                        "value": 0.30 + index * 0.05,
+                        "esd": 0.005,
+                        "source": "depParmDict.WgtFrac",
+                    },
+                }
+            results_path.write_text(json.dumps(results), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--results",
+                    str(results_path),
+                    "--audit",
+                    str(audit_path),
+                    "--out-dir",
+                    str(root / "plots"),
+                    "--sample-id",
+                    "multiphase-fixture",
+                    "--phase",
+                    "all",
+                    "--phase-fractions",
+                    "require",
+                    "--formats",
+                    "png",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(completed.stdout)
+            manifest = json.loads(Path(payload["manifest"]).read_text(encoding="utf-8"))
+            self.assertEqual(2, manifest["schema_version"])
+            self.assertEqual(
+                {"PhaseA", "PhaseB"},
+                set(manifest["phase_fraction_plot"]["phases"]),
+            )
+            self.assertIn("phase_fractions", payload["outputs"])
+            self.assertIn("cell_series_PhaseA", payload["outputs"])
+            self.assertIn("cell_series_PhaseB", payload["outputs"])
+            self.assertTrue(
+                all(
+                    Path(group["png"]).is_file()
+                    for group in payload["outputs"].values()
+                )
+            )
+
+    def test_changing_phase_set_uses_gaps_without_interpolation(self) -> None:
+        frames = [
+            {
+                "frame_id": "f0",
+                "_series_value": 0.0,
+                "phase_set": ["A", "B"],
+                "cells": {
+                    "A": {"a": {"value": 4.0, "symmetry_independent": True}},
+                    "B": {"a": {"value": 5.0, "symmetry_independent": True}},
+                },
+                "mass_fractions": {
+                    "A": {"value": 0.6, "esd": 0.01},
+                    "B": {"value": 0.4, "esd": 0.01},
+                },
+            },
+            {
+                "frame_id": "f1",
+                "_series_value": 1.0,
+                "phase_set": ["B", "C"],
+                "cells": {
+                    "B": {"a": {"value": 5.1, "symmetry_independent": True}},
+                    "C": {"a": {"value": 6.0, "symmetry_independent": True}},
+                },
+                "mass_fractions": {
+                    "B": {"value": 0.7, "esd": 0.01},
+                    "C": {"value": 0.3, "esd": 0.01},
+                },
+            },
+        ]
+        series = collect_phase_fraction_series(frames)
+        assert series is not None
+        self.assertTrue(math.isnan(series["A"]["values"][1]))
+        self.assertTrue(math.isnan(series["C"]["values"][0]))
+        self.assertEqual(["A", "B", "C"], select_phases(frames, "all"))
+        self.assertEqual(["a"], select_cell_parameters(frames, "A", "auto"))
 
 
 if __name__ == "__main__":

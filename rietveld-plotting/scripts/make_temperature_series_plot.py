@@ -37,6 +37,16 @@ CELL_LINE_WIDTH = 0.65
 CELL_MARKER_SIZE = 3.2
 CELL_COLOR = "#b2182b"
 INTENSITY_CMAP = "magma"
+PHASE_COLORS = (
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#9467bd",
+    "#ff7f0e",
+    "#17becf",
+    "#8c564b",
+    "#7f7f7f",
+)
 
 TEMPERATURE_CMAP = LinearSegmentedColormap.from_list(
     "muted_temperature",
@@ -483,27 +493,75 @@ def plot_contour(
     }
 
 
-def select_phase(frames: list[dict[str, Any]], requested: str | None) -> str:
-    phase_sets = [set((frame.get("cells") or {}).keys()) for frame in frames]
-    common = set.intersection(*phase_sets) if phase_sets else set()
-    if requested:
-        if requested not in common:
-            raise SystemExit(
-                f"Requested phase {requested!r} is not present in every frame; common phases: {sorted(common)}"
-            )
-        return requested
-    if len(common) == 1:
-        return next(iter(common))
-    raise SystemExit(
-        "Multiple refined phases are present; select one explicitly with --phase. "
-        f"Common phases: {sorted(common)}"
+def phase_is_active(frame: dict[str, Any], phase: str) -> bool:
+    declared = frame.get("phase_set")
+    if isinstance(declared, list):
+        return phase in declared
+    return phase in (frame.get("cells") or {}) or phase in (
+        frame.get("mass_fractions") or {}
     )
+
+
+def available_cell_phases(frames: list[dict[str, Any]]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            phase
+            for frame in frames
+            for phase in (frame.get("cells") or {}).keys()
+        )
+    )
+
+
+def select_phases(frames: list[dict[str, Any]], requested: str | None) -> list[str]:
+    available = available_cell_phases(frames)
+    if not available:
+        raise SystemExit("Sequential results contain no refined cell data")
+    if requested:
+        requested_names = (
+            available
+            if requested.strip().lower() == "all"
+            else [item.strip() for item in requested.split(",") if item.strip()]
+        )
+        unknown = [phase for phase in requested_names if phase not in available]
+        if unknown:
+            raise SystemExit(
+                f"Requested phases are absent from the refined cell export: {unknown}; "
+                f"available phases: {available}"
+            )
+        return requested_names
+    if len(available) == 1:
+        return available
+    raise SystemExit(
+        "Multiple refined phases are present; select one, a comma-separated list, "
+        f"or --phase all. Available phases: {available}"
+    )
+
+
+def select_phase(frames: list[dict[str, Any]], requested: str | None) -> str:
+    """Backward-compatible single-phase selector used by older callers."""
+    selected = select_phases(frames, requested)
+    if len(selected) != 1:
+        raise SystemExit("A single phase is required for this operation")
+    return selected[0]
 
 
 def select_cell_parameters(
     frames: list[dict[str, Any]], phase: str, requested: str
 ) -> list[str]:
-    first = (frames[0].get("cells") or {}).get(phase) or {}
+    active_frames = [frame for frame in frames if phase_is_active(frame, phase)]
+    if not active_frames:
+        raise SystemExit(f"Phase {phase} is not active in any frame")
+    missing_cell_frames = [
+        str(frame.get("frame_id"))
+        for frame in active_frames
+        if phase not in (frame.get("cells") or {})
+    ]
+    if missing_cell_frames:
+        raise SystemExit(
+            f"Phase {phase} is declared active but lacks refined cell data in frames: "
+            + ", ".join(missing_cell_frames)
+        )
+    first = (active_frames[0].get("cells") or {}).get(phase) or {}
     if requested != "auto":
         parameters = [item.strip() for item in requested.split(",") if item.strip()]
     else:
@@ -517,7 +575,7 @@ def select_cell_parameters(
     if not parameters:
         raise SystemExit(f"No plottable cell parameters found for phase {phase}")
     for parameter in parameters:
-        for frame in frames:
+        for frame in active_frames:
             payload = ((frame.get("cells") or {}).get(phase) or {}).get(parameter)
             if not isinstance(payload, dict) or payload.get("value") is None:
                 raise SystemExit(
@@ -558,10 +616,23 @@ def plot_cells(
     flat_axes = list(axes.flat)
     for index, parameter in enumerate(parameters):
         ax = flat_axes[index]
-        payloads = [((frame.get("cells") or {})[phase])[parameter] for frame in frames]
-        values = np.asarray([float(item["value"]) for item in payloads], dtype=float)
+        payloads = [
+            ((frame.get("cells") or {}).get(phase) or {}).get(parameter)
+            if phase_is_active(frame, phase)
+            else None
+            for frame in frames
+        ]
+        values = np.asarray(
+            [float(item["value"]) if item is not None else np.nan for item in payloads],
+            dtype=float,
+        )
         esds = np.asarray(
-            [float(item["esd"]) if item.get("esd") is not None else np.nan for item in payloads],
+            [
+                float(item["esd"])
+                if item is not None and item.get("esd") is not None
+                else np.nan
+                for item in payloads
+            ],
             dtype=float,
         )
         finite_esd = np.isfinite(esds)
@@ -627,6 +698,135 @@ def plot_cells(
     return fig
 
 
+def collect_phase_fraction_series(
+    frames: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]] | None:
+    """Collect covariance-backed fractions and preserve true absence as NaN."""
+    phase_names = list(
+        dict.fromkeys(
+            phase
+            for frame in frames
+            for phase in (frame.get("mass_fractions") or {}).keys()
+        )
+    )
+    if len(phase_names) < 2:
+        return None
+    series: dict[str, dict[str, Any]] = {}
+    for phase in phase_names:
+        values: list[float] = []
+        esds: list[float] = []
+        absent_frames: list[str] = []
+        sources: set[str] = set()
+        for frame in frames:
+            frame_id = str(frame.get("frame_id", "?"))
+            if not phase_is_active(frame, phase):
+                values.append(math.nan)
+                esds.append(math.nan)
+                absent_frames.append(frame_id)
+                continue
+            payload = (frame.get("mass_fractions") or {}).get(phase)
+            if not isinstance(payload, dict) or payload.get("value") is None:
+                raise SystemExit(
+                    f"Active phase {phase} lacks a mass fraction in frame {frame_id}"
+                )
+            value = float(payload["value"])
+            if not math.isfinite(value) or value < -1e-8 or value > 1.0 + 1e-8:
+                raise SystemExit(
+                    f"Phase {phase} has a nonphysical mass fraction in frame {frame_id}"
+                )
+            esd_value = payload.get("esd")
+            esd = math.nan if esd_value is None else float(esd_value)
+            if math.isfinite(esd) and esd < 0.0:
+                raise SystemExit(
+                    f"Phase {phase} has a negative mass-fraction ESD in frame {frame_id}"
+                )
+            values.append(value)
+            esds.append(esd)
+            if payload.get("source"):
+                sources.add(str(payload["source"]))
+        series[phase] = {
+            "values": np.asarray(values, dtype=float),
+            "esds": np.asarray(esds, dtype=float),
+            "absent_frames": absent_frames,
+            "sources": sorted(sources),
+        }
+    return series
+
+
+def phase_set_boundaries(frames: list[dict[str, Any]]) -> list[int]:
+    boundaries: list[int] = []
+    for index in range(1, len(frames)):
+        previous = tuple(frames[index - 1].get("phase_set") or [])
+        current = tuple(frames[index].get("phase_set") or [])
+        if previous and current and previous != current:
+            boundaries.append(index)
+    return boundaries
+
+
+def plot_phase_fractions(
+    frames: list[dict[str, Any]],
+    fraction_series: dict[str, dict[str, Any]],
+    series_key: str,
+    series_label: str | None,
+    series_unit: str | None,
+    audit_status: str,
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(5.4, 3.65), dpi=180)
+    x_values = np.asarray([frame["_series_value"] for frame in frames], dtype=float)
+    for index, (phase, record) in enumerate(fraction_series.items()):
+        values = np.asarray(record["values"], dtype=float) * 100.0
+        esds = np.asarray(record["esds"], dtype=float) * 100.0
+        color = PHASE_COLORS[index % len(PHASE_COLORS)]
+        ax.plot(x_values, values, color=color, lw=0.72, zorder=1)
+        finite = np.isfinite(values)
+        ax.plot(
+            x_values[finite],
+            values[finite],
+            linestyle="None",
+            marker="o",
+            markersize=3.0,
+            markerfacecolor="white",
+            markeredgecolor=color,
+            markeredgewidth=0.72,
+            label=phase,
+            zorder=3,
+        )
+        finite_esd = finite & np.isfinite(esds)
+        if np.any(finite_esd):
+            ax.errorbar(
+                x_values[finite_esd],
+                values[finite_esd],
+                yerr=esds[finite_esd],
+                fmt="none",
+                ecolor=color,
+                elinewidth=0.42,
+                capsize=1.2,
+                capthick=0.42,
+                zorder=2,
+            )
+    for boundary_index in phase_set_boundaries(frames):
+        boundary_x = 0.5 * (x_values[boundary_index - 1] + x_values[boundary_index])
+        ax.axvline(boundary_x, color="#888888", lw=0.45, ls="--", zorder=0)
+    ax.set_xlabel(series_axis_label(series_key, series_label, series_unit)[0])
+    ax.set_ylabel("Phase fraction (wt%)")
+    ax.set_ylim(-2.0, 102.0)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    style_axes(ax)
+    ax.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.015),
+        ncol=min(3, len(fraction_series)),
+        frameon=False,
+        fontsize=ANNOTATION_SIZE,
+        handlelength=1.2,
+        columnspacing=1.0,
+        borderaxespad=0.0,
+    )
+    fig.subplots_adjust(left=0.16, right=0.98, bottom=0.16, top=0.82)
+    diagnostic_label(fig, audit_status)
+    return fig
+
+
 def save_figure(
     fig: plt.Figure, out_dir: Path, stem: str, formats: list[str]
 ) -> dict[str, str]:
@@ -649,7 +849,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audit", help="sequential_audit.json; defaults beside --results")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--sample-id", help="Output stem prefix; defaults to results parent run name")
-    parser.add_argument("--phase", help="Phase used for cell-parameter panels; required for multiphase data")
+    parser.add_argument(
+        "--phase",
+        help=(
+            "Phase used for cell panels; for multiphase data use one name, a "
+            "comma-separated list, or 'all'"
+        ),
+    )
+    parser.add_argument(
+        "--phase-fractions",
+        choices=("auto", "require", "hide"),
+        default="auto",
+        help=(
+            "auto plots covariance-backed fractions when at least two phases are "
+            "exported; require stops if unavailable; hide suppresses the panel"
+        ),
+    )
     parser.add_argument(
         "--series-key",
         help="Varying metadata coordinate such as source_frame, time_min, or temperature_K",
@@ -713,8 +928,18 @@ def main() -> int:
     verified_gpx = verify_gpx_records(results)
     x_limits = apply_x_window(frames, args.x_min, args.x_max)
     intensity_record = intensity_transform(frames, args.intensity_mode)
-    phase = select_phase(frames, args.phase)
-    cell_parameters = select_cell_parameters(frames, phase, args.cell_parameters)
+    phases = select_phases(frames, args.phase)
+    cell_parameters = {
+        phase: select_cell_parameters(frames, phase, args.cell_parameters)
+        for phase in phases
+    }
+    fraction_series = (
+        None if args.phase_fractions == "hide" else collect_phase_fraction_series(frames)
+    )
+    if args.phase_fractions == "require" and fraction_series is None:
+        raise SystemExit(
+            "--phase-fractions require needs at least two covariance-backed phase series"
+        )
     base_font = configure_style()
 
     out_dir = Path(args.out_dir).expanduser().resolve()
@@ -755,19 +980,38 @@ def main() -> int:
         f"{sample_id}_{route_stem}_contour",
         formats,
     )
-    cell_outputs = save_figure(
-        plot_cells(
-            frames,
-            phase,
-            cell_parameters,
-            series_key,
-            args.series_label,
-            args.series_unit,
-            audit_status,
-        ),
-        out_dir,
-        f"{sample_id}_{clean_name(phase)}_cell_{route_stem}",
-        formats,
+    cell_outputs: dict[str, dict[str, str]] = {}
+    for phase in phases:
+        cell_outputs[phase] = save_figure(
+            plot_cells(
+                frames,
+                phase,
+                cell_parameters[phase],
+                series_key,
+                args.series_label,
+                args.series_unit,
+                audit_status,
+            ),
+            out_dir,
+            f"{sample_id}_{clean_name(phase)}_cell_{route_stem}",
+            formats,
+        )
+    fraction_outputs = (
+        save_figure(
+            plot_phase_fractions(
+                frames,
+                fraction_series,
+                series_key,
+                args.series_label,
+                args.series_unit,
+                audit_status,
+            ),
+            out_dir,
+            f"{sample_id}_phase_fractions_{route_stem}",
+            formats,
+        )
+        if fraction_series is not None
+        else None
     )
 
     results_hash_after = sha256_file(results_path)
@@ -787,7 +1031,7 @@ def main() -> int:
         "monotonic_in_acquisition_order": is_strictly_monotonic(series_values),
     }
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "style_profile": STYLE_PROFILE if is_temperature_series else OPERANDO_STYLE_PROFILE,
         "sample_id": sample_id,
         "direction": direction,
@@ -810,11 +1054,41 @@ def main() -> int:
             "maximum_annotation_count": args.stack_max_labels,
         },
         "contour_display": contour_record,
-        "cell_plot": {
-            "phase": phase,
-            "parameters": cell_parameters,
-            "formal_esd_error_bars": True,
-        },
+        "cell_plots": [
+            {
+                "phase": phase,
+                "parameters": cell_parameters[phase],
+                "formal_esd_error_bars": True,
+                "present_frame_count": sum(
+                    phase_is_active(frame, phase) for frame in frames
+                ),
+                "absent_frame_ids": [
+                    str(frame.get("frame_id"))
+                    for frame in frames
+                    if not phase_is_active(frame, phase)
+                ],
+                "interpolation_across_absence": False,
+            }
+            for phase in phases
+        ],
+        "phase_fraction_plot": (
+            {
+                "phases": list(fraction_series),
+                "formal_esd_error_bars": True,
+                "missing_phase_display": "gap; no interpolation",
+                "phase_set_boundary_indices": phase_set_boundaries(frames),
+                "sources": {
+                    phase: record["sources"]
+                    for phase, record in fraction_series.items()
+                },
+                "absent_frame_ids": {
+                    phase: record["absent_frames"]
+                    for phase, record in fraction_series.items()
+                },
+            }
+            if fraction_series is not None
+            else None
+        ),
         "style": {
             "font": base_font,
             "axis_label_size_pt": AXIS_LABEL_SIZE,
@@ -829,7 +1103,15 @@ def main() -> int:
         "outputs": {
             "stacked": stacked_outputs,
             "contour": contour_outputs,
-            "cell_series": cell_outputs,
+            **(
+                {"cell_series": cell_outputs[phases[0]]}
+                if len(phases) == 1
+                else {
+                    f"cell_series_{clean_name(phase)}": outputs
+                    for phase, outputs in cell_outputs.items()
+                }
+            ),
+            **({"phase_fractions": fraction_outputs} if fraction_outputs else {}),
         },
         "integrity": "all source hashes identical before and after plotting",
     }

@@ -22,6 +22,8 @@
 - Plot the calculated profile as a continuous black `0.48 pt` line through the hollow experimental markers.
 - Plot the observed-minus-calculated curve as a blue `0.50 pt` line (`#1f4ed8`) with a fixed vertical offset.
 - Put short green `0.45 pt` Bragg ticks (`#1b9e77`) between the main profile and difference curve.
+- Keep the established one-row geometry for a single phase. For two or more phases, the default `auto` layout creates one green Bragg row per phase, labels each row with its exact GPX phase name, preserves coincident reflections in each phase row, and places the difference curve below every row. Never deduplicate reflections across phases.
+- A combined multiphase Bragg row is an explicit diagnostic override only. Record the override in the plot manifest and do not imply phase-resolved reflection assignment from that row.
 - Show accurately named `Rwp`, `Rp`, and `GOF` from the GPX in a compact upper-right block at `5.8 pt` by default. Use the same sans-serif font family, normal weight, and font size for all three lines, including subscripts and numerals; use fixed label, equals-sign, and value columns so both the first letters and equals signs align vertically.
 - Hide HKL text labels by default for a clean reference-style figure. When requested, keep labels centered at their true GSAS-II 2theta positions and use vertical clearance or subtle leader lines instead of horizontal shifts.
 - Select up to eight intense, separated reflections only when HKL text labels are enabled.
@@ -36,6 +38,7 @@
 - Verify every visible measured point is represented at `marker-step 1`.
 - Verify the experimental points are unsmoothed `2.05 pt` hollow red circles with no red connecting line.
 - Verify the calculated, difference, and Bragg elements use the locked colors and line widths.
+- For multiphase projects, verify that the phase-row count and per-row reflection counts match the selected histogram's GPX reflection lists and that labels do not obscure ticks or clip at the axes.
 - Verify the statistics block uses fixed label, equals-sign, and value columns.
 - Verify the final canvas ratio, visible range, clipping, and `600 dpi` PNG export before acceptance.
 
