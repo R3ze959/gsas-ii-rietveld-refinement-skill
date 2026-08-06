@@ -22,7 +22,7 @@ DEFAULT_GSASII = Path(
     os.environ.get("GSASII_DIR", Path.home() / "g2main" / "GSAS-II")
 )
 DEFAULT_FORMATS = ("png",)
-STYLE_PROFILE = "locked-reference-v1"
+STYLE_PROFILE = "locked-reference-v2"
 DEFAULT_X_MIN = 10.0
 DEFAULT_X_MAX = 60.0
 DEFAULT_FIGURE_WIDTH = 4.05
@@ -34,6 +34,18 @@ EXPERIMENTAL_COLOR = "#d62728"
 CALCULATION_COLOR = "black"
 DIFFERENCE_COLOR = "#1f4ed8"
 BRAGG_COLOR = "#1b9e77"
+BRAGG_PHASE_COLORS = (
+    BRAGG_COLOR,
+    "#c51b7d",
+    "#2aa9b8",
+    "#e69f00",
+    "#7570b3",
+    "#66a61e",
+    "#a6761d",
+    "#e6ab02",
+    "#7f7f7f",
+    "#8c6d31",
+)
 CALCULATION_LINE_WIDTH = 0.48
 DIFFERENCE_LINE_WIDTH = 0.50
 BRAGG_LINE_WIDTH = 0.45
@@ -78,6 +90,16 @@ def hkl_label(hkl: tuple[int, int, int]) -> str:
     if all(0 <= v <= 9 for v in hkl):
         return f"({hkl[0]}{hkl[1]}{hkl[2]})"
     return f"({hkl[0]},{hkl[1]},{hkl[2]})"
+
+
+def phase_bragg_color(index: int, phase_count: int) -> str:
+    """Return a deterministic, distinct Bragg color for one phase row."""
+    if phase_count <= 1:
+        return BRAGG_COLOR
+    if index < len(BRAGG_PHASE_COLORS):
+        return BRAGG_PHASE_COLORS[index]
+    hue = (0.37 + index * 0.61803398875) % 1.0
+    return mpl.colors.to_hex(mpl.colors.hsv_to_rgb((hue, 0.68, 0.72)))
 
 
 def configure_style() -> None:
@@ -182,6 +204,49 @@ def extract_reflections(hist, x_min: float, x_max: float) -> list[dict[str, obje
     return reflections
 
 
+def extract_phase_mass_fractions(
+    hist,
+    phase_names: list[str],
+) -> dict[str, dict[str, float]]:
+    """Read complete covariance-backed crystalline mass fractions from GSAS-II."""
+    if len(phase_names) < 2:
+        return {}
+    try:
+        raw_fractions = hist.ComputeMassFracs()
+    except Exception:
+        return {}
+    if not isinstance(raw_fractions, dict):
+        return {}
+
+    fractions: dict[str, dict[str, float]] = {}
+    for phase_name in phase_names:
+        payload = raw_fractions.get(phase_name)
+        if not isinstance(payload, (tuple, list)) or len(payload) < 2:
+            return {}
+        value = float(payload[0])
+        esd = float(payload[1])
+        if not np.isfinite(value) or not np.isfinite(esd):
+            return {}
+        if value < 0.0 or value > 1.0 or esd <= 0.0:
+            return {}
+        fractions[phase_name] = {"value": value, "esd": esd}
+
+    total = sum(item["value"] for item in fractions.values())
+    if not np.isclose(total, 1.0, atol=5e-3, rtol=0.0):
+        return {}
+    return fractions
+
+
+def phase_legend_label(
+    phase_name: str,
+    phase_mass_fractions: dict[str, dict[str, float]],
+) -> str:
+    payload = phase_mass_fractions.get(phase_name)
+    if not payload:
+        return phase_name
+    return f"{phase_name} ({100.0 * payload['value']:.2f} wt%)"
+
+
 def select_peak_labels(
     reflections: list[dict[str, object]],
     max_labels: int,
@@ -269,6 +334,7 @@ def prepare_plot_data(
     marker_step: int,
     subtract_background: bool,
     bragg_layout: str = "auto",
+    phase_mass_fractions: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     x = profile["TwoTheta"]
     visible = (x >= x_min) & (x <= x_max)
@@ -311,6 +377,7 @@ def prepare_plot_data(
         bragg_rows.append(
             {
                 "phase": phase_names[0] if len(phase_names) == 1 else None,
+                "color": BRAGG_COLOR,
                 "positions": positions,
                 "y0": np.full_like(positions, y_min - 0.14 * span),
                 "y1": np.full_like(positions, y_min - 0.09 * span),
@@ -336,6 +403,7 @@ def prepare_plot_data(
             bragg_rows.append(
                 {
                     "phase": phase_name,
+                    "color": phase_bragg_color(row_index, len(phase_names)),
                     "positions": positions,
                     "y0": np.full_like(positions, tick_top - tick_height),
                     "y1": np.full_like(positions, tick_top),
@@ -351,6 +419,7 @@ def prepare_plot_data(
         "BraggRows": bragg_rows,
         "BraggLayout": resolved_layout,
         "BraggPhaseNames": phase_names,
+        "PhaseMassFractions": phase_mass_fractions or {},
         "YMin": np.asarray([difference_offset - 0.09 * span]),
         "YMax": np.asarray([y_max + 0.24 * span]),
     }
@@ -408,38 +477,15 @@ def plot_rietveld(
         zorder=2,
     )
     bragg_rows = plot_data["BraggRows"]
-    for row_index, row in enumerate(bragg_rows):
+    for row in bragg_rows:
         ax.vlines(
             row["positions"],
             row["y0"],
             row["y1"],
-            color=BRAGG_COLOR,
+            color=str(row["color"]),
             lw=BRAGG_LINE_WIDTH,
-            label="Bragg position" if row_index == 0 else None,
             zorder=1,
         )
-    if plot_data["BraggLayout"] == "separate":
-        phase_label_x = x_min + 0.012 * (x_max - x_min)
-        for row in bragg_rows:
-            phase_name = str(row["phase"])
-            label_y = 0.5 * (float(row["y0"][0]) + float(row["y1"][0]))
-            ax.text(
-                phase_label_x,
-                label_y,
-                phase_name,
-                ha="left",
-                va="center",
-                fontsize=5.0,
-                color=BRAGG_COLOR,
-                bbox={
-                    "facecolor": "white",
-                    "edgecolor": "none",
-                    "pad": 0.18,
-                    "alpha": 0.88,
-                },
-                clip_on=True,
-                zorder=4,
-            )
 
     if show_hkl_labels:
         for item in label_positions(plot_data, labels, x_min, x_max):
@@ -490,7 +536,7 @@ def plot_rietveld(
         spine.set_linewidth(1.0)
         spine.set_color("black")
 
-    legend_handles = [
+    legend_handles: list[Line2D] = [
         Line2D(
             [0],
             [0],
@@ -505,8 +551,37 @@ def plot_rietveld(
         ),
         Line2D([0], [0], color=CALCULATION_COLOR, lw=1.0, label="Calculation"),
         Line2D([0], [0], color=DIFFERENCE_COLOR, lw=1.0, label="Difference"),
-        Line2D([0], [0], linestyle="None", marker="|", markersize=6, markeredgewidth=0.9, color=BRAGG_COLOR, label="Bragg position"),
     ]
+    if plot_data["BraggLayout"] == "separate" and len(bragg_rows) > 1:
+        legend_handles.extend(
+            Line2D(
+                [0],
+                [0],
+                linestyle="None",
+                marker="|",
+                markersize=6,
+                markeredgewidth=0.9,
+                color=str(row["color"]),
+                label=phase_legend_label(
+                    str(row["phase"]),
+                    plot_data["PhaseMassFractions"],
+                ),
+            )
+            for row in bragg_rows
+        )
+    else:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                linestyle="None",
+                marker="|",
+                markersize=6,
+                markeredgewidth=0.9,
+                color=BRAGG_COLOR,
+                label="Bragg position",
+            )
+        )
     ax.legend(
         handles=legend_handles,
         loc="upper right",
@@ -542,8 +617,14 @@ def plot_rietveld(
                     rf"$\mathsf{{{float(statistics['GOF']):.2f}}}$",
                 )
             )
+        statistics_top_y = FIT_STATISTICS_TOP_Y
+        if plot_data["BraggLayout"] == "separate" and len(bragg_rows) > 1:
+            statistics_top_y = min(
+                FIT_STATISTICS_TOP_Y,
+                0.92 - 0.045 * len(legend_handles),
+            )
         for row_index, (label_text, value_text) in enumerate(statistic_rows):
-            y_position = FIT_STATISTICS_TOP_Y - row_index * FIT_STATISTICS_ROW_STEP
+            y_position = statistics_top_y - row_index * FIT_STATISTICS_ROW_STEP
             common_style = {
                 "transform": ax.transAxes,
                 "va": "top",
@@ -656,6 +737,8 @@ def main() -> int:
     profile = extract_profile(hist)
     statistics = extract_fit_statistics(gpx, hist)
     reflections = extract_reflections(hist, args.x_min, args.x_max)
+    phase_names = list(dict.fromkeys(str(row["phase"]) for row in reflections))
+    phase_mass_fractions = extract_phase_mass_fractions(hist, phase_names)
     labels = select_peak_labels(reflections, args.max_labels, args.label_separation)
     plot_data = prepare_plot_data(
         profile,
@@ -665,6 +748,7 @@ def main() -> int:
         args.marker_step,
         not args.include_background,
         args.bragg_layout,
+        phase_mass_fractions,
     )
 
     fig = plot_rietveld(
@@ -717,16 +801,27 @@ def main() -> int:
                     "line_width_pt": DIFFERENCE_LINE_WIDTH,
                 },
                 "bragg_positions": {
-                    "color": BRAGG_COLOR,
+                    "single_phase_color": BRAGG_COLOR,
                     "line_width_pt": BRAGG_LINE_WIDTH,
                     "layout": plot_data["BraggLayout"],
                     "phase_rows": [
                         {
                             "phase": row["phase"],
+                            "color": row["color"],
                             "reflection_count": int(len(row["positions"])),
                         }
                         for row in plot_data["BraggRows"]
                     ],
+                },
+                "phase_fraction_labels": {
+                    "shown": bool(plot_data["PhaseMassFractions"]),
+                    "source": (
+                        "GSAS-II histogram.ComputeMassFracs covariance-backed crystalline mass fractions"
+                        if plot_data["PhaseMassFractions"]
+                        else None
+                    ),
+                    "scope": "all modeled crystalline phases represented in the plotted Bragg rows",
+                    "values": plot_data["PhaseMassFractions"],
                 },
                 "fit_statistics": {
                     "font_size_pt": FIT_STATISTICS_FONT_SIZE,
