@@ -1,23 +1,44 @@
 # GSAS-II Rietveld Refinement Skills
 
 Conservative Codex skills for real GSAS-II powder refinement and separate,
-read-only publication plotting.
+read-only publication plotting. The repository now includes a clearly labelled
+beta skill for declared multiphase refinement and quantitative phase analysis.
 
 一个面向真实 GSAS-II 粉末精修的 Codex skill 仓库。精修与画图严格分离，
-并新增了原位、operando、温度和时间序列的顺序精修模式。
+并包含明确标注为 Beta 的多相精修与定量分析 skill。
 
 ## Current release / 当前版本
 
-The current release is **v2.2.0**. It adds manifest-driven operando and
-temperature-series refinement, audited metadata synchronization, and separate
-series plotting while preserving the deterministic single-pattern workflow.
-See [v2.2.0 release notes](RELEASE_NOTES_v2.2.0.md).
+The current prerelease is **v3.0.0-beta.1**. It publishes the new
+`gsas-ii-multiphase-refinement` beta and upgrades `rietveld-plotting` for
+multiphase figures. The ordinary `gsas-ii-rietveld-refinement` skill is
+unchanged from v2.2.0. See the
+[v3.0.0-beta.1 release notes](RELEASE_NOTES_v3.0.0-beta.1.md).
 
-当前发布版为 **v2.2.0**：新增基于 manifest 的原位/温度顺序精修、带审计
-的实验元数据同步，以及独立的序列画图；原有确定性单谱精修流程保持不变。
-详见 [v2.2.0 更新说明](RELEASE_NOTES_v2.2.0.md)。
+当前预发布版为 **v3.0.0-beta.1**：新增
+`gsas-ii-multiphase-refinement` Beta，并升级 `rietveld-plotting` 的多相
+绘图能力。普通 `gsas-ii-rietveld-refinement` 精修 skill 与 v2.2.0 完全一致，
+本次不更新。详见 [v3.0.0-beta.1 更新说明](RELEASE_NOTES_v3.0.0-beta.1.md)。
 
 ## Changelog / 更新日志
+
+### v3.0.0-beta.1 — 2026-08-06
+
+- Added `gsas-ii-multiphase-refinement` as an explicitly labelled **Beta**
+  skill for declared crystalline-phase refinement, covariance-backed QPA,
+  common-problem sensitivity checks, trace-phase screening, internal-standard
+  amorphous calculations, constrained dopant-model grids, and audited
+  multiphase sequential handoff.
+- Upgraded `rietveld-plotting` with phase-separated Bragg rows, multiphase cell
+  trajectories, covariance-backed phase-fraction figures, changing-phase-set
+  gaps, and phase-boundary markers.
+- Kept `gsas-ii-rietveld-refinement` byte-for-byte unchanged from v2.2.0.
+- Retained the PolyForm Noncommercial License 1.0.0 and the existing required
+  copyright notice. Commercial use still requires written authorization.
+
+本预发布版只新增多相精修 Beta 并升级多相绘图；普通单相/顺序精修 skill
+不变。多相结果必须保留 `pass`、`review`、`fail` 科学门槛，Beta 不负责未知
+物相自动识别，也不默认代表结果已达到发表标准。
 
 ### v2.2.0 — 2026-08-01
 
@@ -41,15 +62,33 @@ Noncommercial 1.0.0，商业使用需另行取得书面授权。
 
 ```text
 gsas-ii-rietveld-refinement/  # single-pattern and sequential refinement
-rietveld-plotting/            # read-only single-pattern and series plotting
+gsas-ii-multiphase-refinement/ # beta multiphase refinement and QPA
+rietveld-plotting/            # read-only single/multiphase and series plotting
 docs/                         # public validation record
 tests/                        # repository-owned unit tests
 ```
 
-The refinement skill never generates figures. The plotting skill never refines
-or saves a GPX.
+The two refinement skills never generate figures. The plotting skill never
+refines or saves a GPX.
 
-精修 skill 不生成图片；画图 skill 只读最终 GPX，不运行精修、不修改 GPX。
+两个精修 skill 均不生成图片；画图 skill 只读最终 GPX，不运行精修、不修改
+GPX。
+
+To install only this beta update while keeping the ordinary refinement skill at
+v2.2.0, copy these two directories from the tagged checkout into the Codex
+skills directory:
+
+```bash
+cp -R gsas-ii-multiphase-refinement "$HOME/.codex/skills/"
+cp -R rietveld-plotting "$HOME/.codex/skills/"
+```
+
+Restart Codex after installation. Back up an existing `rietveld-plotting`
+directory before replacing it. Do not copy `gsas-ii-rietveld-refinement` when
+performing this two-skill beta update.
+
+如果只更新本次 Beta，请仅复制“多相精修”和“画图”两个目录，并保留原有
+v2.2.0 普通精修 skill。覆盖旧画图 skill 前先备份，安装后重启 Codex。
 
 ## Mandatory request classification / 强制任务分类
 
@@ -91,7 +130,7 @@ their machine-readable plans.
   transactional archive replacement for single-pattern results.
 - Accepts explicitly declared phase sets in sequential runs. Quantitative phase
   fractions remain `review` unless constraints and formal uncertainties pass
-  the audit; this release does not claim general-purpose multiphase automation.
+  the audit. General multiphase QPA is routed to the separate beta skill.
 
 - 通过 `GSASIIscriptable` 真实调用 GSAS-II，不把模拟曲线当作精修。
 - 单谱精修采用确定性分阶段和分支比较，而不是按顺序盲目释放晶胞、Zero、
@@ -102,7 +141,30 @@ their machine-readable plans.
 - 单谱结果保留 `candidate_summary.json`，报告经过机器校验，归档采用
   “验证输入 → 临时目录 → 哈希复核 → 原子替换”。
 - 顺序精修可以读取显式声明的相集合；只有约束和正式不确定度均通过审计时，
-  才能将相分数作为定量结果。本版本不宣称通用自动多相精修。
+  才能将相分数作为定量结果。一般多相 QPA 转交独立的 Beta skill。
+
+## Multiphase refinement beta / 多相精修 Beta
+
+`gsas-ii-multiphase-refinement` handles two or more **declared** crystalline
+phases. It calls real GSAS-II, audits each CIF import, preserves calibrated
+instrument broadening, uses identifiable scale parameterizations, extracts
+GSAS-II mass fractions with covariance-backed uncertainties, and rebuilds the
+selected model to test exact-state repeatability. It also contains explicit
+sensitivity contracts for preferred orientation, microabsorption, trace phases,
+internal-standard amorphous content, controlled cell release, and constrained
+dopant-model grids.
+
+This is a beta release. It does not identify unknown phases, prove dopant
+content or site occupancy from an unconstrained fit, or automatically turn a
+`review` result into a publishable quantitative claim. Declared-phase
+multiphase sequential/operando work uses the companion v2.2.0 sequential
+driver and a separate multiphase stage validator.
+
+`gsas-ii-multiphase-refinement` 面向两个或以上已声明晶相，真实调用 GSAS-II，
+核验 CIF 导入、仪器峰形、可辨识的 Scale 参数化、协方差相分数不确定度和最终
+状态重复性。它还提供择优取向、微吸收、微量相、内标非晶、受控晶胞释放和
+受约束掺杂模型网格的审计入口。该功能明确为 Beta：不自动识别未知相，不凭
+自由占位精修证明掺杂量或占位，也不会把 `review` 自动包装成可发表结论。
 
 ## Operando and sequential mode / 原位与顺序精修
 
@@ -192,13 +254,15 @@ personal absolute paths.
 
 `rietveld-plotting` reads an accepted final GPX and creates the locked
 publication-style single-pattern figure without modifying refinement
-parameters. It now also reads an audited temperature or operando sequential
-result and generates three complementary figures: a series-coloured stacked
-pattern, an intensity contour map, and refined cell-parameter trajectories
-with formal GSAS-II uncertainties. Constant-temperature battery operando
-results use an audited time/voltage/capacity coordinate when available, or
-honest frame order when synchronization is absent. The sequential route
-verifies all recorded pattern and GPX hashes before and after plotting,
+parameters. For multiphase GPX files it can place phase-labelled Bragg ticks on
+separate rows. It also reads an audited temperature or operando sequential
+result and generates a series-coloured stacked pattern, an intensity contour
+map, per-phase refined cell trajectories, and covariance-backed phase-fraction
+plots. Absent phases are shown as gaps rather than interpolated trajectories,
+and changing phase sets receive explicit boundary markers. Constant-temperature
+battery operando results use an audited time/voltage/capacity coordinate when
+available, or honest frame order when synchronization is absent. The sequential
+route verifies all recorded pattern and GPX hashes before and after plotting,
 exports 600 dpi PNG plus editable SVG, and retains a machine-readable plot
 manifest.
 

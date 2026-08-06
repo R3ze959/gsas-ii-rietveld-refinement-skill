@@ -1,0 +1,4 @@
+interface:
+  display_name: "GSAS-II Multiphase Refinement (Beta)"
+  short_description: "Beta multiphase QPA with scientific audit gates"
+  default_prompt: "Use $gsas-ii-multiphase-refinement to run a beta, evidence-bound multiphase GSAS-II QPA with scientific audit gates and no plotting."
