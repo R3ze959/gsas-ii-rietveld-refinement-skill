@@ -9,18 +9,37 @@ beta skill for declared multiphase refinement and quantitative phase analysis.
 
 ## Current release / 当前版本
 
-The current prerelease is **v3.0.0-beta.1**. It publishes the new
-`gsas-ii-multiphase-refinement` beta and upgrades `rietveld-plotting` for
-multiphase figures. The ordinary `gsas-ii-rietveld-refinement` skill is
-unchanged from v2.2.0. See the
-[v3.0.0-beta.1 release notes](RELEASE_NOTES_v3.0.0-beta.1.md).
+The current prerelease is **v3.0.0-beta.2**. It retains the
+`gsas-ii-multiphase-refinement` beta from beta.1 and upgrades
+`rietveld-plotting` with phase-specific Bragg colors, phase-name legends, and
+optional covariance-backed crystalline wt% labels. The ordinary
+`gsas-ii-rietveld-refinement` skill remains unchanged from v2.2.0. See the
+[v3.0.0-beta.2 release notes](RELEASE_NOTES_v3.0.0-beta.2.md).
 
-当前预发布版为 **v3.0.0-beta.1**：新增
-`gsas-ii-multiphase-refinement` Beta，并升级 `rietveld-plotting` 的多相
-绘图能力。普通 `gsas-ii-rietveld-refinement` 精修 skill 与 v2.2.0 完全一致，
-本次不更新。详见 [v3.0.0-beta.1 更新说明](RELEASE_NOTES_v3.0.0-beta.1.md)。
+当前预发布版为 **v3.0.0-beta.2**：保留 beta.1 的
+`gsas-ii-multiphase-refinement` Beta，并升级 `rietveld-plotting`，使多相
+Bragg 峰按物相使用不同颜色，图例显示物相名，并在存在完整协方差质量分数时
+显示晶态物相 wt%。普通 `gsas-ii-rietveld-refinement` 精修 skill 仍与 v2.2.0
+一致。详见 [v3.0.0-beta.2 更新说明](RELEASE_NOTES_v3.0.0-beta.2.md)。
 
 ## Changelog / 更新日志
+
+### v3.0.0-beta.2 — 2026-08-08
+
+- Updated `rietveld-plotting` to detect single- versus multiphase GPX
+  reflection lists automatically.
+- Preserved the established green `Bragg position` row and legend for
+  single-phase figures.
+- Added deterministic phase-specific Bragg colors and exact GPX phase names in
+  the upper-right legend for multiphase figures.
+- Added optional `xx.xx wt%` legend suffixes only when GSAS-II supplies a
+  complete, normalized, covariance-backed crystalline mass-fraction set.
+- Recorded phase-color mappings, mass-fraction values, uncertainties, and
+  source provenance in the optional plot manifest.
+
+本版只更新画图 skill：单相图保持原样；多相图按物相区分 Bragg 颜色，并在
+右上角显示对应物相名。只有 GSAS-II 返回完整、归一化且带协方差误差的晶态
+质量分数时，图例才附加 wt%，不会用峰高或普通 Scale 值冒充相比例。
 
 ### v3.0.0-beta.1 — 2026-08-06
 
