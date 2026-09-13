@@ -321,3 +321,14 @@ libraries, and third-party datasets remain governed by their own licenses.
 
 本仓库不捆绑、也不重新许可 GSAS-II。GSAS-II、第三方库和第三方数据集
 分别遵循它们自身的许可证。
+
+<details>
+<summary>☕ 支持作者</summary>
+
+如果这个项目对你有帮助，欢迎自愿赞赏，支持后续维护。感谢你的支持！
+
+使用微信扫描下方收款码：
+
+<img src="https://raw.githubusercontent.com/R3ze959/eis-drt-batch-analysis-skill/main/.github/assets/wechat-pay.jpg" alt="微信赞赏收款码" width="280" />
+
+</details>
